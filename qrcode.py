@@ -1,48 +1,86 @@
-from polynomials import generate_message_polynomial, perform_long_division
+from turtle import pen
+from qrcode_drawer import QRCodeDrawer
+from itertools import zip_longest
+from polynomials import (
+    generate_message_polynomial,
+    generate_error_correction_codewords,
+)
 import re
-from math import ceil
+from math import ceil, floor
 from mode import Mode
-from typing import Optional
-from pprint import pprint
-import sys
-from PIL import Image, ImageDraw
-from color import *
-from anchor_position import AnchorPosition 
+from PIL import Image
+from color import BLACK, BLUE, WHITE, GREEN
+from anchor_position import AnchorPosition
 from mask_pattern import MaskPattern
 from error_correction import ErrorCorrection
 from constants import alignment_patterns_locations
-from utils import golay, to_color, bose_chaudhuri_hocquenghem
-from encoding import to_alphanumeric
+from utils import golay, interleave, to_color, bose_chaudhuri_hocquenghem
+from encoding import (
+    CodewordBlockInformation,
+    to_alphanumeric,
+    to_binary,
+    to_kanji,
+    to_numeric,
+    lookup_data_codeword_capacity,
+    get_codeword_block_information,
+)
 from square import Square
 
-class QRCode():
+# TODO: Have this QRCode class be no frills, then make a SimpleQRCode subclass which does lots of the stuff for you
 
-    version: int # 1 <= V <= 40
-    size: int
-    matrix: list[list[Optional[bool]]]
-    error_correction_level: ErrorCorrection
-    mask_pattern: Optional[int]
+# from typing import Callable, Concatenate, TypeVar, ParamSpec
+#
+# T = TypeVar("T")
+# P = ParamSpec("P")
+#
+#
+# def is_setup(
+#    func: Callable[Concatenate["QRCode", P], T],
+# ) -> Callable[Concatenate["QRCode", P], T]:
+#    def wrapper(self: "QRCode", *args: P.args, **kwargs: P.kwargs) -> T:
+#        if self.version is None or self.size is None:
+#            raise ValueError("Cannot run function while not setup")
+#        if self.drawer is None:
+#            raise ValueError("Cannot run function without a drawer")
+#        return func(self, *args, **kwargs)
+#
+#    return wrapper
+
+
+class QRCode:
+    _version: int | None = None  # 1 <= V <= 40
+    size: int | None = None
+    error_correction_level: ErrorCorrection | None = None
+    _mask_pattern: int | None = None
     data: list[tuple[Mode, str]] = []
+    # TODO: I don't really like initializing it like this, the type checker wants me to though
+    matrix: list[list[Square]] = [[]]
+    drawer: QRCodeDrawer | None = None
 
-    def __init__(self,
-                 version: int = 7,
-                 error_correction_level: ErrorCorrection = ErrorCorrection.LOW,
-                 mask_pattern: int = None
-             ):
+    def __init__(
+        self,
+        version: int | None = None,
+        error_correction_level: ErrorCorrection | None = None,
+        mask_pattern: int | None = None,
+    ):
         self.version = version
-        self.size = (4 * self.version) + 17
         self.error_correction_level = error_correction_level
         self.mask_pattern = mask_pattern
 
-    def add_data(self, data: str, mode: Mode=Mode.ALPHANUMERIC):
+    def _validate_setup(self) -> None:
+        if self.version is None or self.size is None:
+            raise ValueError("Cannot run function while not setup")
+        if self.drawer is None:
+            raise ValueError("Cannot run function without a drawer")
+
+    def add_data(self, data: str, mode: Mode) -> None:
         # TODO: Some sort of length validation for all modes
         # TODO: Some sort of whole data validation maybe? I probably want an Encoding class with abstract methods which are imlemented?
-        if(mode == Mode.ALPHANUMERIC and len(data) > 511):
-            raise ValueError("Alphanumeric data is over 511 characters long and needs to be broken into multiple segments")
         self.data.append((mode, data))
 
-    def generate(self):
+    def generate(self) -> None:
         self._generate_matrix()
+        self.drawer = QRCodeDrawer(self.matrix)
         self._add_finder_patterns()
         self._add_separators()
         self._add_alignment_patterns()
@@ -54,47 +92,48 @@ class QRCode():
         self._add_data_mask()
         self._add_format_information_area()
 
-    def _generate_matrix(self):
+    @property
+    def version(self):
+        return self._version
+
+    @version.setter
+    def version(self, version: int | None) -> None:
+        if version is None:
+            self._version = version
+            self.size = None
+        elif 1 <= version <= 40:
+            self._version = version
+            self.size = (4 * version) + 17
+        else:
+            raise ValueError(
+                f"Cannot set version. {version} is an invalid version number."
+            )
+
+    @property
+    def mask_pattern(self):
+        return self._mask_pattern
+
+    @mask_pattern.setter
+    def mask_pattern(self, mask_pattern: int | None):
+        if mask_pattern is None:
+            self._mask_pattern = mask_pattern
+        elif 0 <= mask_pattern <= 7:
+            self._mask_pattern = mask_pattern
+        else:
+            raise ValueError(
+                f"Cannot set mask pattern {mask_pattern}. Expected to be None (auto) or an integer 0-7"
+            )
+
+    def _generate_matrix(self) -> None:
+        if self.size is None:
+            raise ValueError(f"Cannot initialize a matrix with version {self.version}")
         self.matrix = [[Square() for _ in range(self.size)] for _ in range(self.size)]
-        #pprint(self.matrix)
 
-    def _place_artifact(self, artifact: list[list[tuple[int, int, int]]], anchorPosition: AnchorPosition, padding_row: int=0, padding_column: int=0):
-        match anchorPosition:
-            case AnchorPosition.TOP_LEFT:
-                row_offset = padding_row
-                column_offset = padding_column
-            case AnchorPosition.TOP_RIGHT:
-                row_offset = padding_row
-                column_offset = self.size - len(artifact[0]) - padding_column
-            case AnchorPosition.BOTTOM_LEFT:
-                row_offset = self.size - len(artifact) - padding_row
-                column_offset = padding_column
-            case AnchorPosition.BOTTOM_RIGHT:
-                row_offset = self.size - len(artifact) - padding_row
-                column_offset = self.size - len(artifact[0]) - padding_column
-            case _:
-                raise ValueError("Invalid AnchorPosition")
+    def _add_finder_patterns(self) -> None:
+        if self.drawer is None:
+            raise ValueError("Cannot add separators with a NoneType drawer")
 
-        # Make artifact a clone, so we don't impact the original
-        artifact = [row[:] for row in artifact]
-
-        # Flip horizontally if position to the right
-        if anchorPosition in [AnchorPosition.TOP_RIGHT, AnchorPosition.BOTTOM_RIGHT]:
-            for row in range(len(artifact)):
-                artifact[row] = list(reversed(artifact[row]))
-
-        # Flip vertically if position to the bottom
-        if anchorPosition in [AnchorPosition.BOTTOM_LEFT, AnchorPosition.BOTTOM_RIGHT]:
-            artifact = list(reversed(artifact))
-
-        for row in range(len(artifact)):
-            for col in range(len(artifact[row])):
-
-                if artifact[row][col] == None: continue
-                self.matrix[row + row_offset][col + column_offset].set_color(artifact[row][col]).lock()
-
-    def _add_finder_patterns(self):
-        finder_pattern = [
+        finder_pattern: list[list[tuple[int, int, int] | None]] = [
             [BLACK, BLACK, BLACK, BLACK, BLACK, BLACK, BLACK],
             [BLACK, WHITE, WHITE, WHITE, WHITE, WHITE, BLACK],
             [BLACK, WHITE, BLACK, BLACK, BLACK, WHITE, BLACK],
@@ -104,12 +143,15 @@ class QRCode():
             [BLACK, BLACK, BLACK, BLACK, BLACK, BLACK, BLACK],
         ]
 
-        self._place_artifact(finder_pattern, AnchorPosition.TOP_LEFT)
-        self._place_artifact(finder_pattern, AnchorPosition.TOP_RIGHT)
-        self._place_artifact(finder_pattern, AnchorPosition.BOTTOM_LEFT)
+        self.drawer.place_artifact(finder_pattern, AnchorPosition.TOP_LEFT)
+        self.drawer.place_artifact(finder_pattern, AnchorPosition.TOP_RIGHT)
+        self.drawer.place_artifact(finder_pattern, AnchorPosition.BOTTOM_LEFT)
 
-    def _add_separators(self):
-        separator_pattern = [
+    def _add_separators(self) -> None:
+        if self.drawer is None:
+            raise ValueError("Cannot add separators with a NoneType drawer")
+
+        separator_pattern: list[list[tuple[int, int, int] | None]] = [
             [None, None, None, None, None, None, None, WHITE],
             [None, None, None, None, None, None, None, WHITE],
             [None, None, None, None, None, None, None, WHITE],
@@ -120,15 +162,21 @@ class QRCode():
             [WHITE, WHITE, WHITE, WHITE, WHITE, WHITE, WHITE, WHITE],
         ]
 
-        self._place_artifact(separator_pattern, AnchorPosition.TOP_LEFT)
-        self._place_artifact(separator_pattern, AnchorPosition.TOP_RIGHT)
-        self._place_artifact(separator_pattern, AnchorPosition.BOTTOM_LEFT)
+        self.drawer.place_artifact(separator_pattern, AnchorPosition.TOP_LEFT)
+        self.drawer.place_artifact(separator_pattern, AnchorPosition.TOP_RIGHT)
+        self.drawer.place_artifact(separator_pattern, AnchorPosition.BOTTOM_LEFT)
 
-    def _add_alignment_patterns(self):
+    def _add_alignment_patterns(self) -> None:
         # From https://www.arscreatio.com/repositorio/images/n_23/SC031-N-1915-18004Text.pdf#page=87
-        locations = alignment_patterns_locations[self.version]
 
-        alignment_pattern = [
+        if self.version is None or self.size is None:
+            raise ValueError("Cannot run function while not setup")
+        if self.drawer is None:
+            raise ValueError("Cannot add alignment patterns with a NoneType drawer")
+
+        locations: list[int] = alignment_patterns_locations[self.version]
+
+        alignment_pattern: list[list[tuple[int, int, int] | None]] = [
             [BLACK, BLACK, BLACK, BLACK, BLACK],
             [BLACK, WHITE, WHITE, WHITE, BLACK],
             [BLACK, WHITE, BLACK, WHITE, BLACK],
@@ -138,17 +186,29 @@ class QRCode():
 
         for row in locations:
             for col in locations:
-                if self._check_overlap_exists(row, col, len(alignment_pattern)//2): continue
-                self._place_artifact(alignment_pattern, AnchorPosition.TOP_LEFT, padding_row=row-2, padding_column=col-2)
-                
-    def _check_overlap_exists(self, row: int, col: int, radius: int) -> bool:
-        return self.matrix[row + radius][col - radius].is_locked() or \
-        self.matrix[row + radius][col + radius].is_locked() or \
-        self.matrix[row - radius][col - radius].is_locked() or \
-        self.matrix[row - radius][col + radius].is_locked()
+                if self._check_overlap_exists(row, col, len(alignment_pattern) // 2):
+                    continue
+                self.drawer.place_artifact(
+                    alignment_pattern,
+                    AnchorPosition.TOP_LEFT,
+                    padding_row=row - 2,
+                    padding_column=col - 2,
+                )
 
+    def _check_overlap_exists(self, row: int, col: int, radius: int) -> bool:
+        return (
+            self.matrix[row + radius][col - radius].is_locked()
+            or self.matrix[row + radius][col + radius].is_locked()
+            or self.matrix[row - radius][col - radius].is_locked()
+            or self.matrix[row - radius][col + radius].is_locked()
+        )
 
     def _add_timing_patterns(self):
+        if self.version is None or self.size is None:
+            raise ValueError("Cannot run function while not setup")
+        if self.drawer is None:
+            raise ValueError("Cannot run function without a drawer")
+
         for i in range(8, self.size - 8):
             self.matrix[6][i].set_color(BLACK if i % 2 == 0 else WHITE).lock()
             self.matrix[i][6].set_color(BLACK if i % 2 == 0 else WHITE).lock()
@@ -161,7 +221,8 @@ class QRCode():
             self.matrix[8][i].set_color(GREEN).reserve()
             # Do not overwrite the dark module
             # Technically not needed since that square is locked
-            if i == self.size - 8: continue
+            if i == self.size - 8:
+                continue
             self.matrix[i][8].set_color(GREEN).reserve()
 
         for i in range(6):
@@ -174,247 +235,505 @@ class QRCode():
 
     def _add_version_information_area(self):
         # According to https://upload.wikimedia.org/wikipedia/commons/4/45/QRCode-2-Structure.png version info is only required when version >= 7
-        if self.version < 7: return
+        # TODO: This feels a bit bad, maybe change this
+        if self.version is None or self.size is None:
+            raise ValueError("Cannot add version information nwhen version is None")
+
+        if self.version < 7:
+            return
+
+        if self.drawer is None:
+            raise ValueError(
+                "Cannot add version information area with a NoneType drawer"
+            )
 
         code = list(reversed(golay(self.version)))
-        version_artifact = [
-            [ to_color(c) for c in code[ 0: 3] ],
-            [ to_color(c) for c in code[ 3: 6] ],
-            [ to_color(c) for c in code[ 6: 9] ],
-            [ to_color(c) for c in code[ 9:12] ],
-            [ to_color(c) for c in code[12:15] ],
-            [ to_color(c) for c in code[15:18] ],
+        version_artifact: list[list[tuple[int, int, int] | None]] = [
+            [to_color(c) for c in code[0:3]],
+            [to_color(c) for c in code[3:6]],
+            [to_color(c) for c in code[6:9]],
+            [to_color(c) for c in code[9:12]],
+            [to_color(c) for c in code[12:15]],
+            [to_color(c) for c in code[15:18]],
         ]
 
-        self._place_artifact(version_artifact, AnchorPosition.TOP_LEFT, padding_column=self.size - 11)
-
+        self.drawer.place_artifact(
+            version_artifact, AnchorPosition.TOP_LEFT, padding_column=self.size - 11
+        )
 
         # Rotate the array (modified from https://stackoverflow.com/a/8421412)
         version_artifact = list(zip(*version_artifact))
 
-        self._place_artifact(version_artifact, AnchorPosition.TOP_LEFT, padding_row=self.size - 11)
-
-    def _push_byte(self,
-                   byte_data: str,
-                   row: int,
-                   col: int,
-                   is_going_up: bool,
-                   is_right: bool) -> tuple[bool, bool]:
-        bit_arr = list(byte_data)
-
-        while len(bit_arr) > 0:
-
-            if not self.matrix[row][col].is_locked() and \
-                not self.matrix[row][col].is_reserved():
-                self.matrix[row][col].set_color(to_color(bit_arr.pop(0)))
-                #print("setting color", self.matrix[row][col].get_color())
-
-            if is_right:
-                col -= 1
-            else:
-                col += 1
-                if is_going_up:
-                    row -= 1
-                else:
-                    row += 1
-
-            is_right = not is_right
-
-
-            if row < 0:
-                row = 0
-                col -= 2
-                is_going_up = not is_going_up
-            elif row >= self.size:
-                row = self.size - 1
-                col -= 2
-                is_going_up = not is_going_up
-
-            # Column 6 is a special case with no usable space, so skip it
-            # https://www.thonky.com/qr-code-tutorial/module-placement-matrix > "Exception: Vertical Timing Pattern"
-            if col == 6: col -= 1
-
-
-            # TODO: Some check for if you hit the vertical timing, probably hardcode a column num
-
-            if col < 0:
-                raise Exception("Trying to write off of the map")
-
-        return (row, col, is_going_up, is_right)
+        self.drawer.place_artifact(
+            version_artifact, AnchorPosition.TOP_LEFT, padding_row=self.size - 11
+        )
 
     def _add_data(self):
+        # TODO: Likely in SimpleQRCode here is the algorithm for getting the best/most efficient mores https://gcore.jsdelivr.net/gh/tonycrane/tonycrane.github.io/p/409d352d/ISO_IEC18004-2015.pdf#C062021e.indd%3AAnnex%20sec_J%3A60&page=108
         row: int = self.size - 1
         col: int = self.size - 1
         is_going_up: bool = True
         is_right: bool = True
-        inserted_bits = ""
+        bit_stream: str = ""
 
+        # TODO: Seems like you can actually one have 1 data type, so this doesn't really make sense as coded
+        # No, this doesn't actually seem true....
         for mode, data in self.data:
-            #print(f"Adding data of type {mode.name.lower()}: \"{data}\"")
-            #print(f"First byte of data to add is {bin(mode)} with length 4")
-            alphanumeric_bit_string = to_alphanumeric(data)
-            #print(alphanumeric_bit_string)
-            #row, col, is_going_up, is_right = self._push_byte(alphanumeric_bit_string, row, col, is_going_up, is_right)
-            inserted_bits += alphanumeric_bit_string
+            # TODO: Implement all other string types and do some checking for data length/type
+            if mode == Mode.ALPHANUMERIC:
+                bit_stream += to_alphanumeric(data, self.version)
+            elif mode == Mode.NUMERIC:
+                bit_stream += to_numeric(data, self.version)
+            elif mode == Mode.BINARY:
+                bit_stream += to_binary(data, self.version)
+            elif mode == Mode.KANJI:
+                bit_stream += to_kanji(data, self.version)
+            else:
+                raise Exception(f"Unable to add data of type {mode}")
 
-        # TODO: Make this a lookup from a table
-        data_codewords = 13
+        data_codewords: int = lookup_data_codeword_capacity(
+            self.version, self.error_correction_level
+        )
 
-        bits_required = data_codewords * 8
+        bits_required: int = data_codewords * 8
 
-        maximum_terminator_length = 4
+        maximum_terminator_length: int = 4
 
-        terminator_required = min(bits_required, len(inserted_bits) + maximum_terminator_length)
+        terminator_required: int = min(
+            bits_required, len(bit_stream) + maximum_terminator_length
+        )
 
-        inserted_bits = inserted_bits.ljust(terminator_required, '0')
+        bit_stream = bit_stream.ljust(terminator_required, "0")
 
-        if(len(inserted_bits) % 8 != 0):
-            next_multiple_of_8 = ceil(len(inserted_bits) / 8)*8
-            inserted_bits = inserted_bits.ljust(next_multiple_of_8, '0')
+        if len(bit_stream) % 8 != 0:
+            next_multiple_of_8 = ceil(len(bit_stream) / 8) * 8
+            bit_stream = bit_stream.ljust(next_multiple_of_8, "0")
 
         padding_bytes = ("11101100", "00010001")
         i = 0
-        while(len(inserted_bits) < bits_required):
-            inserted_bits += padding_bytes[i % 2]
+        while len(bit_stream) < bits_required:
+            bit_stream += padding_bytes[i % 2]
             i += 1
 
-        #print(inserted_bits)
+        # row, col, is_going_up, is_right = self.push_byte(bit_stream)
 
-        row, col, is_going_up, is_right = self._push_byte(inserted_bits, row, col, is_going_up, is_right)
+        # print(bit_stream)
 
-        self._add_error_correction_code(inserted_bits, row, col, is_going_up, is_right)
-        
-    def _add_error_correction_code(self, data_str: str, row, col, is_going_up, is_right):
+        self._add_error_correction_code(bit_stream)
+
+    def _get_required_remainder_bits(self) -> int:
+        if self.version <= 1:
+            return 0
+        elif self.version <= 6:
+            return 7
+        elif self.version <= 13:
+            return 0
+        elif self.version <= 20:
+            return 3
+        elif self.version <= 27:
+            return 4
+        elif self.version <= 34:
+            return 3
+        else:
+            return 0
+
+    def _add_error_correction_code(self, data_str: str) -> None:
+        if self.version is None or self.size is None:
+            raise ValueError("Cannot run function while not setup")
+        if self.drawer is None:
+            raise ValueError("Cannot run function without a drawer")
+
         # If version is above 2, need to break data in multiple blocks
 
-        #data_str = "0100001101010101010001101000011001010111001001100101010111000010011101110011001000000110000100100000011001100111001001101111011011110110010000100000011101110110100001101111001000000111001001100101011000010110110001101100011110010010000001101011011011100110111101110111011100110010000001110111011010000110010101110010011001010010000001101000011010010111001100100000011101000110111101110111011001010110110000100000011010010111001100101110000011101100000100011110110000010001111011000001000111101100"
+        # data_str = "0100001101010101010001101000011001010111001001100101010111000010011101110011001000000110000100100000011001100111001001101111011011110110010000100000011101110110100001101111001000000111001001100101011000010110110001101100011110010010000001101011011011100110111101110111011100110010000001110111011010000110010101110010011001010010000001101000011010010111001100100000011101000110111101110111011001010110110000100000011010010111001100100001000011101100000100011110110000010001111011000001000111101100"
 
-        #data_str="00100000010110110000101101111000110100010111001011011100010011010100001101000000111011000001000111101100000100011110110000010001"
+        cwblock_info: CodewordBlockInformation = get_codeword_block_information(
+            self.version, self.error_correction_level
+        )
 
-        print(len(data_str))
+        # Split the data str into code words (8 bits)
+        codewords = re.findall(".{8}", data_str)
 
-        codewords = re.findall('.{8}', data_str)
+        # Create 2 groups
+        group_1_full: list[str] = codewords[: cwblock_info.group_1.size()]
+        group_2_full: list[str] = codewords[cwblock_info.group_1.size() :]
 
-        blocks_in_group_1 = 1
-        data_codewords_per_group_1_block = 13
-        blocks_in_group_2 = 0
-        data_codewords_per_group_2_block = 0
+        group_1: list[list[str]] = []
+        # Split those groups into blocks
+        for i in range(cwblock_info.group_1.block_count):
+            group_1.append(
+                group_1_full[: cwblock_info.group_1.codeword_count_per_block]
+            )
+            group_1_full = group_1_full[cwblock_info.group_1.codeword_count_per_block :]
 
-        group_1_size = blocks_in_group_1 * data_codewords_per_group_1_block
-        group_2_size = blocks_in_group_2 * data_codewords_per_group_2_block
+        group_2: list[list[str]] = []
+        # Split those groups into blocks
+        for i in range(cwblock_info.group_2.block_count):
+            group_2.append(
+                group_2_full[: cwblock_info.group_2.codeword_count_per_block]
+            )
+            group_2_full = group_2_full[cwblock_info.group_2.codeword_count_per_block :]
 
-        group_1 = codewords[:group_1_size]
-        group_1 = [
-            group_1[:data_codewords_per_group_1_block],
-            group_1[data_codewords_per_group_1_block:]
+        # group_1 = [
+        #    group_1[: cwblock_info.group_1.codeword_count_per_block],
+        #    group_1[cwblock_info.group_1.codeword_count_per_block :],
+        # ]
+
+        # group_2 = [
+        #     group_2_full[: cwblock_info.group_2.codeword_count_per_block],
+        #     group_2_full[cwblock_info.group_2.codeword_count_per_block :],
+        # ]
+
+        # TODO: For now this is hard coding that version = 0 and there is only 1 group with 1 block
+
+        # Genereate the message polynomial for our block
+
+        # ec_int_blocks = []
+
+        # This is new
+
+        group_1_message_polynomials = [
+            generate_message_polynomial(block) for block in group_1
         ]
-        group_2 = codewords[group_1_size:]
-        group_2 = [
-            group_2[:data_codewords_per_group_2_block],
-            group_2[data_codewords_per_group_2_block:]
+        group_2_message_polynomials = [
+            generate_message_polynomial(block) for block in group_2
         ]
 
-        print("Group1")
-        print(group_1)
-        print("")
+        group_1_ec = [
+            generate_error_correction_codewords(
+                mp_coeff, cwblock_info.ec_codewords_per_block
+            ).as_integers()
+            for mp_coeff in group_1_message_polynomials
+        ]
 
-        codewords_to_generate = 13
+        group_2_ec = [
+            generate_error_correction_codewords(
+                mp_coeff, cwblock_info.ec_codewords_per_block
+            ).as_integers()
+            for mp_coeff in group_2_message_polynomials
+        ]
 
-        message_polynomial_coefficients = generate_message_polynomial(group_1[0])
+        # This was there before
 
-        ec = perform_long_division(message_polynomial_coefficients, codewords_to_generate).as_integers()
+        # message_polynomial_coefficients = generate_message_polynomial(group_1[0])
+        ## message_polynomial_coefficients = generate_message_polynomial(group_1[0])
 
-        ec_str = [str(bin(x))[2:].zfill(8) for x in ec]
+        ## Perform the long division to get the error correction codewords
+        # error_correction_polynomial_ints = generate_error_correction_codewords(
+        #    message_polynomial_coefficients, cwblock_info.ec_codewords_per_block
+        # ).as_integers()
 
-        print("AHH")
-        print(len(ec))
-        print(len("".join(ec_str)))
+        print([x for x in group_1_ec])
+        print([x for x in group_2_ec])
 
-        for ec_byte in ec_str:
-            row, col, is_going_up, is_right = self._push_byte(ec_byte, row, col, is_going_up, is_right)
+        interleaving_data: list[str] = interleave(group_1, group_2)
+        interleaving_ec_integers: list[int] = interleave(group_1_ec, group_2_ec)
+        interleaving_ec: list[str] = [
+            bin(value)[2:].zfill(8) for value in interleaving_ec_integers
+        ]
 
-        #print(ec)
+        # # Convert those ints to codeword string (8 bits)
+        # error_correction_str = "".join(
+        #     [str(bin(x))[2:].zfill(8) for x in error_correction_polynomial_ints]
+        # )
 
-        #print(message_polynomial_coefficients)
+        bit_stream = "".join(interleaving_data) + "".join(interleaving_ec)
 
-        #print(group_1)
-        #print(group_2)
+        # Add remainder bits if required
+        bit_stream += "0" * self._get_required_remainder_bits()
+
+        print(bit_stream)
+
+        self.drawer.push_byte(bit_stream)
 
     def _add_data_mask(self):
+        if self.mask_pattern is None:
+            best_mask = self._determine_best_data_mask()
+            self.mask_pattern = best_mask
+
+        self._apply_data_mask()
+
+    def _determine_best_data_mask(self):
+        # TODO: Move this to a test somehow...
+        # The matrix is an incorrectly generated matrix from https://www.thonky.com/qr-code-tutorial/data-masking used to compare the scores for each penalty.
+        # To use it, I drew the matrix, but then you need to add in all of the features (alignment patterns, timings, etc) so they are reserved/locked. Then, you apply the data mask (0) to "undo" the data masking. Then you have the original (incorrect) matrix used to generate all of the penalty scores on the website.
+        # Each index corresponds to one mask
+        # self.matrix = [
+        #    [Square(BLACK) if int(v) == 1 else Square(WHITE) for v in list(x)]
+        #    for x in "111111101100001111111 100000101001001000001 101110101001101011101 101110101000001011101 101110101010001011101 100000100010001000001 111111101010101111111 000000001000000000000 011010110000101011111 010000001111000010001 001101110110001011000 011011010011010101110 100010101011101110101 000000001101001000101 111111101010000101100 100000100101101101000 101110101010001111111 101110100101010100010 101110101000111101001 100000101011010001011 111111100000111100001".split(
+        #        " "
+        #    )
+        # ]
+
+        # self.drawer = QRCodeDrawer(self.matrix)
+        # self._add_finder_patterns()
+        # self._add_separators()
+        # self._add_alignment_patterns()
+        # self._add_timing_patterns()
+        # self._add_dark_module()
+        # self._reserve_format_information_area()
+        # self._add_version_information_area()
+        # self.mask_pattern = 0b000
+        # self._apply_data_mask()
+
+        mask_pattern_count = 8
+        scores: list[int] = []
+        for i in range(mask_pattern_count):
+            self.mask_pattern = i
+            # if i == 0:
+            #    self.write_to_png("partial.png")
+            self._apply_data_mask()
+            self._add_format_information_area()
+
+            if i == 1:
+                print("Attempt")
+                print(self.matrix)
+                self.write_to_png("partial.png")
+            penalty = self._evaluate_data_mask()
+            scores.append(penalty)
+            # Applying the mask again will "unapply" it
+            self._apply_data_mask()
+
+        best_score = min(scores)
+        best_mask = scores.index(best_score)
+        print(f"Determined best mask was {best_mask} with a score of {best_score}")
+        return best_mask
+
+    def _apply_data_mask(self):
+        # TODO: Make it automatically select the "best" data mask
+        # This involves apply each, evaluating and saving that score, then finding the best
+        if self.size is None:
+            raise ValueError(
+                f"Cannot apply data mask on qrcode of version {self.version}"
+            )
         for row in range(self.size):
             for col in range(self.size):
+                alternate_color = (
+                    WHITE if self.matrix[row][col].get_color() == BLACK else BLACK
+                )
 
-                current_color = BLACK if self.matrix[row][col].get_color() == BLACK else WHITE
-                alternate_color = WHITE if self.matrix[row][col].get_color() == BLACK else BLACK
+                if (
+                    self.matrix[row][col].is_reserved()
+                    or self.matrix[row][col].is_locked()
+                ):
+                    continue
 
-                if self.matrix[row][col].is_reserved() or self.matrix[row][col].is_locked(): continue
+                if self.mask_pattern is None:
+                    raise Exception("Cannot apply a None mask")
 
-                self.matrix[row][col].set_color(alternate_color if MaskPattern[0](row, col) else current_color)
+                if MaskPattern[self.mask_pattern](row, col):
+                    _ = self.matrix[row][col].set_color(alternate_color)
 
     def _add_format_information_area(self):
+        if self.version is None or self.size is None:
+            raise ValueError("Cannot run function while not setup")
+        if self.drawer is None:
+            raise ValueError("Cannot run function without a drawer")
+        if self.error_correction_level is None:
+            raise ValueError("Cannot run function without an error correction level")
 
-        format_data = self.error_correction_level << 3
+        format_data: int = self.error_correction_level << 3
+        if self.mask_pattern is None:
+            raise Exception("A mask pattern has not yet been selected")
         format_data |= self.mask_pattern
 
         format_string = bose_chaudhuri_hocquenghem(format_data).zfill(15)
 
-        paths = [[
-            [8, 0],
-            [8, 1],
-            [8, 2],
-            [8, 3],
-            [8, 4],
-            [8, 5],
-            [8, 7],
-            [8, 8],
-            [7, 8],
-            [5, 8],
-            [4, 8],
-            [3, 8],
-            [2, 8],
-            [1, 8],
-            [0, 8],
-        ], [
-            [self.size - 1, 8],
-            [self.size - 2, 8],
-            [self.size - 3, 8],
-            [self.size - 4, 8],
-            [self.size - 5, 8],
-            [self.size - 6, 8],
-            [self.size - 7, 8],
-            [8, self.size - 8],
-            [8, self.size - 7],
-            [8, self.size - 6],
-            [8, self.size - 5],
-            [8, self.size - 4],
-            [8, self.size - 3],
-            [8, self.size - 2],
-            [8, self.size - 1],
-        ]]
+        paths = [
+            [
+                [8, 0],
+                [8, 1],
+                [8, 2],
+                [8, 3],
+                [8, 4],
+                [8, 5],
+                [8, 7],
+                [8, 8],
+                [7, 8],
+                [5, 8],
+                [4, 8],
+                [3, 8],
+                [2, 8],
+                [1, 8],
+                [0, 8],
+            ],
+            [
+                [self.size - 1, 8],
+                [self.size - 2, 8],
+                [self.size - 3, 8],
+                [self.size - 4, 8],
+                [self.size - 5, 8],
+                [self.size - 6, 8],
+                [self.size - 7, 8],
+                [8, self.size - 8],
+                [8, self.size - 7],
+                [8, self.size - 6],
+                [8, self.size - 5],
+                [8, self.size - 4],
+                [8, self.size - 3],
+                [8, self.size - 2],
+                [8, self.size - 1],
+            ],
+        ]
 
         for path in paths:
             for i in range(len(format_string)):
-                if i >= len(path): break
+                if i >= len(path):
+                    break
                 row, col = path[i]
-                self.matrix[row][col].set_color(to_color(format_string[i]))
+                _ = self.matrix[row][col].set_color(to_color(format_string[i]))
 
-    def draw(self):
-        img = Image.new(mode="RGBA", size=(self.size, self.size))
+    def _evaluate_data_mask(self):
+        penalty_1 = self._evaluation_condition_1()
+        penalty_2 = self._evaluation_condition_2()
+        penalty_3 = self._evaluation_condition_3()
+        penalty_4 = self._evaluation_condition_4()
+        total_penalty = penalty_1 + penalty_2 + penalty_3 + penalty_4
+
+        return total_penalty
+
+    def _evaluation_condition_1(self):
+        penalty = 0
+        transpose_matrix: list[list[Square]] = [values for values in zip(*self.matrix)]
+        for matrix in [self.matrix, transpose_matrix]:
+            for row in matrix:
+                count = 0
+                prev_cell = None
+                for cell in row:
+                    if cell == prev_cell:
+                        count += 1
+                    else:
+                        count = 1
+                        prev_cell = cell
+
+                    if count == 5:
+                        penalty += 3
+                    elif count > 5:
+                        penalty += 1
+
+        print(f"Penalty condition 1 is {penalty}")
+
+        return penalty
+
+    def _evaluation_condition_2(self):
+        penalty = 0
+        for row in range(len(self.matrix) - 1):
+            for col in range(len(self.matrix[0]) - 1):
+                cells = [
+                    self.matrix[row + 0][col + 0],
+                    self.matrix[row + 0][col + 1],
+                    self.matrix[row + 1][col + 0],
+                    self.matrix[row + 1][col + 1],
+                ]
+                if all(cell == cells[0] for cell in cells):
+                    penalty += 3
+
+        print(f"Penalty condition 2 is {penalty}")
+
+        return penalty
+
+    def _evaluation_condition_3(self):
+        window_size = 11
+        penalty = 0
+        transpose_matrix = [list(values) for values in zip(*self.matrix)]
+        match_patterns = [
+            [
+                BLACK,
+                WHITE,
+                BLACK,
+                BLACK,
+                BLACK,
+                WHITE,
+                BLACK,
+                WHITE,
+                WHITE,
+                WHITE,
+                WHITE,
+            ],
+            [
+                WHITE,
+                WHITE,
+                WHITE,
+                WHITE,
+                BLACK,
+                WHITE,
+                BLACK,
+                BLACK,
+                BLACK,
+                WHITE,
+                BLACK,
+            ],
+        ]
+        for matrix in [self.matrix, transpose_matrix]:
+            for row in matrix:
+                for col in range(len(row) + 1 - window_size):
+                    window = row[col : col + window_size]
+                    if window in match_patterns:
+                        penalty += 40
+
+        print(f"Penalty condition 3 is {penalty}")
+
+        return penalty
+
+    def _evaluation_condition_4(self):
+        total_cells = len(self.matrix) * len(self.matrix[0])
+        dark_cell_count = 0
+        for row in self.matrix:
+            for cell in row:
+                if cell == BLACK:
+                    dark_cell_count += 1
+        percentage_dark = (float(dark_cell_count) / total_cells) * 100
+        prev_multiple_of_5 = floor(percentage_dark / 5.0) * 5
+        next_multiple_of_5 = ceil(percentage_dark / 5.0) * 5
+        prev_multiple_of_5 = abs(prev_multiple_of_5 - 50)
+        next_multiple_of_5 = abs(next_multiple_of_5 - 50)
+        # Both should already be integers
+        prev_multiple_of_5 = int(prev_multiple_of_5 / 5)
+        next_multiple_of_5 = int(next_multiple_of_5 / 5)
+        penalty = min(prev_multiple_of_5, next_multiple_of_5)
+
+        print(f"Penalty condition 4 is {penalty}")
+        return penalty
+
+    def write_to_png(self, file_name: str | None = None, border: int = 4) -> None:
+        if self.version is None or self.size is None:
+            raise ValueError("Cannot run function while not setup")
+
+        file_name = file_name or "out.png"
+        img = Image.new(
+            mode="RGBA", size=(self.size + 2 * border, self.size + 2 * border)
+        )
         pixels = img.load()
+
+        if pixels is None:
+            raise Exception("Unable to create image")
+
+        for row in range(self.size + 2 * border):
+            for col in range(self.size + 2 * border):
+                pixels[col, row] = WHITE
+
         for row in range(self.size):
             for col in range(self.size):
-                pixels[col, row] = self.matrix[row][col].get_color()
-        #img.show()
-        img.save("out.png")
+                pixels[col + border, row + border] = self.matrix[row][col].get_color()
+
+        # img.show()
+        img.save(file_name)
+
 
 if __name__ == "__main__":
     qrcode = QRCode(
-        version = 1,
-        error_correction_level = ErrorCorrection.QUARTILE,
-        mask_pattern = 0b100
+        version=1,
+        error_correction_level=ErrorCorrection.QUARTILE,
+        mask_pattern=None,
     )
-    #qrcode._generate_matrix()
-    qrcode.add_data("HELLO WORLD")
+
+    # qrcode.add_data("THIS IS A LONG STRING OF TEXT THAT VERSION ", Mode.ALPHANUMERIC)
+    # qrcode.add_data("314159265358979323846264338327950", Mode.NUMERIC)
+    # qrcode.add_data("茗荷", Mode.KANJI)
+    # qrcode.add_data(" Leicester city is number ", Mode.BINARY)
+    # qrcode.add_data("1", Mode.NUMERIC)
+    # qrcode.add_data(" BEST FOOTBALL TEAM", Mode.ALPHANUMERIC)
+    # qrcode.add_data("!!!", Mode.BINARY)
+    qrcode.add_data("HELLO WORLD", Mode.ALPHANUMERIC)
     qrcode.generate()
-    qrcode.draw()
-    #qrcode.add_data("hello", Mode.ALPHANUMERIC)
+    qrcode.write_to_png()

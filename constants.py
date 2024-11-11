@@ -1,4 +1,4 @@
-alignment_patterns_locations = [
+alignment_patterns_locations: list[list[int]] = [
     [],
     [],
     [6, 18],
@@ -41,5 +41,3 @@ alignment_patterns_locations = [
     [6, 26, 54, 82, 110, 138, 166],
     [6, 30, 58, 86, 114, 142, 170],
 ]
-
-

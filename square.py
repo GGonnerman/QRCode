@@ -1,4 +1,6 @@
-from color import GRAY
+from turtle import color
+from typing import Any, override
+from color import BLACK, GRAY
 
 
 class Square:
@@ -25,7 +27,8 @@ class Square:
         return self
 
     def get_color(self) -> tuple[int, int, int]:
-        # if self.is_locked() or self.is_reserved(): return (0, 256, 0)
+        # if self.is_locked() or self.is_reserved():
+        #    return (0, 256, 0)
         return self._color
 
     def is_reserved(self) -> bool:
@@ -40,3 +43,16 @@ class Square:
     def lock(self) -> None:
         self._locked = True
         self._reserved = True
+
+    @override
+    def __repr__(self) -> str:
+        return "1" if self._color == BLACK else "0"
+
+    @override
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, Square):
+            return self._color == other.get_color()
+        elif isinstance(other, tuple):
+            return self.get_color() == other
+        else:
+            return False
