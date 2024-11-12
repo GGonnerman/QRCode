@@ -1,4 +1,4 @@
-from turtle import pen
+import os
 from qrcode_drawer import QRCodeDrawer
 from itertools import zip_longest
 from polynomials import (
@@ -697,11 +697,19 @@ class QRCode:
         print(f"Penalty condition 4 is {penalty}")
         return penalty
 
-    def write_to_png(self, file_name: str | None = None, border: int = 4) -> None:
+    def write_to_png(
+        self,
+        file_name: str | None = None,
+        destination_folder: str | None = None,
+        border: int = 4,
+    ) -> None:
         if self.version is None or self.size is None:
             raise ValueError("Cannot run function while not setup")
 
-        file_name = file_name or "out.png"
+        destination_folder = destination_folder or "out"
+        file_name = file_name or "qrcode.png"
+        file_path = os.path.join(destination_folder, file_name)
+
         img = Image.new(
             mode="RGBA", size=(self.size + 2 * border, self.size + 2 * border)
         )
@@ -718,8 +726,19 @@ class QRCode:
             for col in range(self.size):
                 pixels[col + border, row + border] = self.matrix[row][col].get_color()
 
-        # img.show()
-        img.save(file_name)
+        if os.path.exists(destination_folder) and not os.path.isdir(destination_folder):
+            raise Exception(
+                f"Destination folder ({destination_folder}) appears to be a file. It must be deleted or destionation_folder must be changed so a folder can be created"
+            )
+        elif os.path.exists(file_path) and not os.path.isfile(file_path):
+            raise Exception(
+                f"Destination path ({file_path}) appears to be a directory. It must be deleted or either destination_folder or file_name must be changed so a file can be created"
+            )
+
+        if not os.path.exists(destination_folder):
+            os.mkdir(destination_folder)
+
+        img.save(file_path)
 
 
 if __name__ == "__main__":
