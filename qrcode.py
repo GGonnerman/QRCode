@@ -17,6 +17,7 @@ from constants import alignment_patterns_locations
 from utils import golay, interleave, to_color, bose_chaudhuri_hocquenghem
 from encoding import (
     CodewordBlockInformation,
+    encode,
     to_alphanumeric,
     to_binary,
     to_kanji,
@@ -269,27 +270,18 @@ class QRCode:
         )
 
     def _add_data(self):
+        if self.version is None:
+            raise Exception("Cannot add data when version is None")
+        if self.size is None:
+            raise Exception("Cannot add data when size is None")
+        if self.error_correction_level is None:
+            raise Exception("Cannot add data when error correction level is None")
         # TODO: Likely in SimpleQRCode here is the algorithm for getting the best/most efficient mores https://gcore.jsdelivr.net/gh/tonycrane/tonycrane.github.io/p/409d352d/ISO_IEC18004-2015.pdf#C062021e.indd%3AAnnex%20sec_J%3A60&page=108
-        row: int = self.size - 1
-        col: int = self.size - 1
-        is_going_up: bool = True
-        is_right: bool = True
         bit_stream: str = ""
 
-        # TODO: Seems like you can actually one have 1 data type, so this doesn't really make sense as coded
-        # No, this doesn't actually seem true....
         for mode, data in self.data:
             # TODO: Implement all other string types and do some checking for data length/type
-            if mode == Mode.ALPHANUMERIC:
-                bit_stream += to_alphanumeric(data, self.version)
-            elif mode == Mode.NUMERIC:
-                bit_stream += to_numeric(data, self.version)
-            elif mode == Mode.BINARY:
-                bit_stream += to_binary(data, self.version)
-            elif mode == Mode.KANJI:
-                bit_stream += to_kanji(data, self.version)
-            else:
-                raise Exception(f"Unable to add data of type {mode}")
+            bit_stream += encode(data, self.version, mode)
 
         data_codewords: int = lookup_data_codeword_capacity(
             self.version, self.error_correction_level
@@ -319,9 +311,18 @@ class QRCode:
 
         # print(bit_stream)
 
+        if (len(bit_stream)) / 8 > lookup_data_codeword_capacity(
+            self.version, self.error_correction_level
+        ):
+            raise Exception(
+                f"Too much data to be properly stored in qrcode of version {self.version} with error correction level {self.error_correction_level.name}"
+            )
+
         self._add_error_correction_code(bit_stream)
 
     def _get_required_remainder_bits(self) -> int:
+        if self.version is None:
+            raise Exception("Cannot calculated remainder bits with None version")
         if self.version <= 1:
             return 0
         elif self.version <= 6:
@@ -351,6 +352,7 @@ class QRCode:
             self.version, self.error_correction_level
         )
 
+        # TODO: I think here I exclude data that would push us over the edge, but I don't think that's good
         # Split the data str into code words (8 bits)
         codewords = re.findall(".{8}", data_str)
 
@@ -423,8 +425,9 @@ class QRCode:
         #    message_polynomial_coefficients, cwblock_info.ec_codewords_per_block
         # ).as_integers()
 
-        print([x for x in group_1_ec])
-        print([x for x in group_2_ec])
+        # print("Printing ec bits...")
+        # print([x for x in group_1_ec])
+        # print([x for x in group_2_ec])
 
         interleaving_data: list[str] = interleave(group_1, group_2)
         interleaving_ec_integers: list[int] = interleave(group_1_ec, group_2_ec)
@@ -442,7 +445,7 @@ class QRCode:
         # Add remainder bits if required
         bit_stream += "0" * self._get_required_remainder_bits()
 
-        print(bit_stream)
+        # print(bit_stream)
 
         self.drawer.push_byte(bit_stream)
 
@@ -455,6 +458,7 @@ class QRCode:
 
     def _determine_best_data_mask(self):
         # TODO: Move this to a test somehow...
+        #
         # The matrix is an incorrectly generated matrix from https://www.thonky.com/qr-code-tutorial/data-masking used to compare the scores for each penalty.
         # To use it, I drew the matrix, but then you need to add in all of the features (alignment patterns, timings, etc) so they are reserved/locked. Then, you apply the data mask (0) to "undo" the data masking. Then you have the original (incorrect) matrix used to generate all of the penalty scores on the website.
         # Each index corresponds to one mask
@@ -500,8 +504,6 @@ class QRCode:
         return best_mask
 
     def _apply_data_mask(self):
-        # TODO: Make it automatically select the "best" data mask
-        # This involves apply each, evaluating and saving that score, then finding the best
         if self.size is None:
             raise ValueError(
                 f"Cannot apply data mask on qrcode of version {self.version}"
@@ -722,18 +724,18 @@ class QRCode:
 
 if __name__ == "__main__":
     qrcode = QRCode(
-        version=1,
-        error_correction_level=ErrorCorrection.QUARTILE,
-        mask_pattern=None,
+        version=9,
+        error_correction_level=ErrorCorrection.LOW,
+        mask_pattern=0b111,
     )
 
-    # qrcode.add_data("THIS IS A LONG STRING OF TEXT THAT VERSION ", Mode.ALPHANUMERIC)
-    # qrcode.add_data("314159265358979323846264338327950", Mode.NUMERIC)
-    # qrcode.add_data("茗荷", Mode.KANJI)
-    # qrcode.add_data(" Leicester city is number ", Mode.BINARY)
-    # qrcode.add_data("1", Mode.NUMERIC)
-    # qrcode.add_data(" BEST FOOTBALL TEAM", Mode.ALPHANUMERIC)
-    # qrcode.add_data("!!!", Mode.BINARY)
+    qrcode.add_data("THIS IS A LONG STRING OF TEXT THAT VERSION ", Mode.ALPHANUMERIC)
+    qrcode.add_data("314159265358979323846264338327950", Mode.NUMERIC)
+    qrcode.add_data("茗荷", Mode.KANJI)
+    qrcode.add_data(" Leicester city is number ", Mode.BINARY)
+    qrcode.add_data("1", Mode.NUMERIC)
+    qrcode.add_data(" BEST FOOTBALL TEAM", Mode.ALPHANUMERIC)
+    qrcode.add_data("!!!", Mode.BINARY)
     qrcode.add_data("HELLO WORLD", Mode.ALPHANUMERIC)
     qrcode.generate()
     qrcode.write_to_png()

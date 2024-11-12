@@ -4,10 +4,14 @@ from error_correction import ErrorCorrection
 from mode import Mode
 
 from encoding import (
+    encode,
     lookup_alphanumeric_value,
     to_alphanumeric,
-    get_character_count_indicator,
+    get_character_count_indicator_length,
     lookup_data_codeword_capacity,
+    to_binary,
+    to_kanji,
+    to_numeric,
 )
 
 
@@ -18,19 +22,41 @@ class TestEncodingMethods(unittest.TestCase):
         self.assertEqual(36, lookup_alphanumeric_value(" "))
 
     def test_get_character_count_indicator(self):
-        self.assertEqual(9, get_character_count_indicator(Mode.ALPHANUMERIC, 5))
-        self.assertEqual(16, get_character_count_indicator(Mode.BINARY, 11))
-        self.assertEqual(12, get_character_count_indicator(Mode.KANJI, 33))
-        self.assertEqual(14, get_character_count_indicator(Mode.NUMERIC, 40))
+        self.assertEqual(9, get_character_count_indicator_length(Mode.ALPHANUMERIC, 5))
+        self.assertEqual(16, get_character_count_indicator_length(Mode.BINARY, 11))
+        self.assertEqual(12, get_character_count_indicator_length(Mode.KANJI, 33))
+        self.assertEqual(14, get_character_count_indicator_length(Mode.NUMERIC, 40))
 
     def test_to_alphanumeric(self):
         self.assertEqual(
             "00100000010110110000101101111000110100010111001011011100010011010100001101",
-            to_alphanumeric("HELLO WORLD", version=1),
+            encode("HELLO WORLD", version=1, mode=Mode.ALPHANUMERIC),
         )
         self.assertEqual(
             "00100000001010011100111011100111001000010",
-            to_alphanumeric("AC-42", version=1),
+            encode("AC-42", version=1, mode=Mode.ALPHANUMERIC),
+        )
+
+    def test_to_numeric(self):
+        self.assertEqual(
+            "00010000001000000000110001010110011000011",
+            encode("01234567", version=1, mode=Mode.NUMERIC),
+        )
+        self.assertEqual(
+            "00010000000111110110001110000100101001",
+            encode("8675309", version=1, mode=Mode.NUMERIC),
+        )
+
+    def test_to_binary(self):
+        self.assertEqual(
+            "01000000110101001000011001010110110001101100011011110010110000100000011101110110111101110010011011000110010000100001",
+            encode("Hello, world!", version=1, mode=Mode.BINARY),
+        )
+
+    def test_to_kanji(self):
+        self.assertEqual(
+            "10000000001011010101010100011010010111",
+            encode("茗荷", version=1, mode=Mode.KANJI),
         )
 
     def test_lookup_data_codeword_capacity(self):

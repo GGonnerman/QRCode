@@ -72,10 +72,9 @@ class TestEncodingMethods(unittest.TestCase):
 
     def test_generate_error_correction_codewords(self):
         # TODO: probably remove this after done solving this issue
-        import logging
-
-        loglevel = logging.DEBUG
-        logging.basicConfig(level=loglevel)
+        # import logging
+        # loglevel = logging.DEBUG
+        # logging.basicConfig(level=loglevel)
 
         mp = generate_message_polynomial(
             [

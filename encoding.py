@@ -1,18 +1,120 @@
 from enum import StrEnum
-from typing import override
+from typing import override, Callable
 from error_correction import ErrorCorrection
 from mode import Mode
 import re
 
 from utils import split_into_segments
 
+# TODO: I think data should be first encoded with utf-8. Then you analyze those hex chars. But also idk
 
+
+# https://www.arscreatio.com/repositorio/images/n_23/SC031-N-1915-18004Text.pdf#page=103
+def generate_most_efficient_modes(data: str, version: int):
+    version_index = 0 if version <= 9 else 1 if version <= 26 else 2
+    # Select initial mode
+    mode: Mode
+    if in_exclusive_subset(data[0], Mode.BINARY):
+        mode = Mode.BINARY
+    elif in_exclusive_subset(data[0], Mode.KANJI):
+        if in_exclusive_subset(data[1], Mode.NUMERIC) or in_exclusive_subset(
+            data[1], Mode.ALPHANUMERIC
+        ):
+            mode = Mode.KANJI
+
+    mode = Mode.KANJI
+
+    i: int = 1
+    while i < len(data):
+        # While in byte mode
+        if mode == Mode.BINARY:
+            pass
+        # While in alphanumeric mode
+        elif mode == Mode.ALPHANUMERIC:
+            pass
+        # While in numeric mode
+        elif mode == Mode.NUMERIC:
+            pass
+        else:
+            pass
+
+
+if __name__ == "__main__":
+    generate_most_efficient_modes("Hello, gamer!", 1)
+
+
+def in_exclusive_subset(character: str, mode: Mode):
+    if mode == Mode.NUMERIC:
+        return 0x30 <= ord(character) <= 0x39
+    elif mode == Mode.ALPHANUMERIC:
+        return ord(character) in [
+            0x20,
+            0x24,
+            0x25,
+            0x2A,
+            0x2B,
+            0x2D,
+            0x2E,
+            0x2D,
+            0x3A,
+            0x41,
+            0x42,
+            0x43,
+            0x44,
+            0x45,
+            0x46,
+            0x47,
+            0x48,
+            0x49,
+            0x4A,
+            0x4B,
+            0x4C,
+            0x4D,
+            0x4E,
+            0x4F,
+            0x50,
+            0x51,
+            0x52,
+            0x53,
+            0x54,
+            0x55,
+            0x56,
+            0x57,
+            0x58,
+            0x59,
+            0x5A,
+        ]
+    elif mode == Mode.BINARY:
+        if 0x00 <= ord(character) <= 0x1F:
+            return True
+        elif 0x21 <= ord(character) <= 0x23:
+            return True
+        elif 0x26 <= ord(character) <= 0x29:
+            return True
+        elif ord(character) == 0x2C:
+            return True
+        elif 0x3B <= ord(character) <= 0x40:
+            return True
+        elif 0x5B <= ord(character) <= 0xFF:
+            if 0x80 <= ord(character) <= 0x9F or 0xE0 <= ord(character) <= 0xFF:
+                return False
+            else:
+                return True
+        else:
+            return False
+    elif mode == Mode.KANJI:
+        return is_in_first_kanji_range(ord(character)) or is_in_second_kanji_range(
+            ord(character)
+        )
+
+
+# TODO: Either figure out ECI encoding or remove this
 class ENCODING(StrEnum):
     UTF8 = "utf-8"
     LATIN1 = "iso-8859-1"
 
 
-def get_character_count_indicator(mode: Mode, version: int) -> int:
+def get_character_count_indicator_length(mode: Mode, version: int) -> int:
     if 1 <= version <= 9:
         if mode == Mode.NUMERIC:
             return 10
@@ -45,8 +147,42 @@ def get_character_count_indicator(mode: Mode, version: int) -> int:
     raise Exception(f"Unable to calculate character count indicator for mode {mode}")
 
 
+# TODO: Raise standardized exceptions when trying to encode invalid data
+def encode(data: str, version: int, mode: Mode) -> str:
+    data_func: Callable[[str], tuple[int, int]]
+
+    if mode == Mode.NUMERIC:
+        data_func = to_numeric
+    elif mode == Mode.ALPHANUMERIC:
+        data_func = to_alphanumeric
+    elif mode == Mode.BINARY:
+        data_func = to_binary
+    elif mode == Mode.KANJI:
+        data_func = to_kanji
+    else:
+        raise NotImplementedError(
+            f"Support for encoding type {mode} has not yet been implemented"
+        )
+
+    mode_bits: int = mode
+    mode_bits_size: int = 4
+    length_bits: int = len(data)
+    length_bits_size: int = get_character_count_indicator_length(mode, version)
+    data_bits, data_bits_size = data_func(data)
+    size: int = mode_bits_size + length_bits_size + data_bits_size
+
+    bit_stream = 0
+    bit_stream |= mode_bits
+    bit_stream <<= length_bits_size
+    bit_stream |= length_bits
+    bit_stream <<= data_bits_size
+    bit_stream |= data_bits
+
+    return bin(bit_stream)[2:].zfill(size)
+
+
 # https://www.arscreatio.com/repositorio/images/n_23/SC031-N-1915-18004Text.pdf#page=33
-def to_alphanumeric(data: str, version: int) -> str:
+def to_alphanumeric(data: str) -> tuple[int, int]:
     base45_data = [lookup_alphanumeric_value(c) for c in data]
     bit_data = 0
     for i in range(0, len(base45_data), 2):
@@ -59,33 +195,16 @@ def to_alphanumeric(data: str, version: int) -> str:
         else:
             bit_data = bit_data << 6
             bit_data = bit_data | current_data
-    bit_string = 0
-    mode_bits = 0b0010
-    mode_bits_size = 4
-    length_bits = len(data)
-    length_bits_size = get_character_count_indicator(Mode.ALPHANUMERIC, version)
-    data_binary_length = 11 * (length_bits // 2) + 6 * (length_bits % 2)
-    bit_string <<= mode_bits_size
-    bit_string |= mode_bits
-    bit_string <<= length_bits_size
-    bit_string |= length_bits
-    bit_string <<= data_binary_length
-    bit_string |= bit_data
-    return str(bin(bit_string))[2:].zfill(
-        mode_bits_size + length_bits_size + data_binary_length
-    )
+    data_binary_length = 11 * (len(data) // 2) + 6 * (len(data) % 2)
+
+    return bit_data, data_binary_length
 
 
-def lookup_alphanumeric_value(c: str) -> int:
-    return list("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:").index(c)
+def lookup_alphanumeric_value(character: str) -> int:
+    return list("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:").index(character)
 
 
-def to_numeric(data: str, version: int) -> str:
-    mode_bits: Mode = Mode.NUMERIC
-    mode_bits_size: int = 4
-    length_bits: int = len(data)
-    length_bits_size: int = get_character_count_indicator(Mode.NUMERIC, version)
-
+def to_numeric(data: str) -> tuple[int, int]:
     digit_groups: list[str] = re.findall(".{1,3}", data)
 
     data_bits: int = 0
@@ -112,30 +231,15 @@ def to_numeric(data: str, version: int) -> str:
 
     data_size = 10 * (len(data) // 3) + r
 
-    size = mode_bits_size + length_bits_size + data_size
-
-    bit_stream = 0
-    bit_stream |= mode_bits
-    bit_stream <<= length_bits_size
-    bit_stream |= length_bits
-    bit_stream <<= data_size
-    bit_stream |= data_bits
-
-    return bin(bit_stream)[2:].zfill(size)
+    return data_bits, data_size
 
 
-def to_binary(data: str, version: int) -> str:
-    mode_bits: Mode = Mode.BINARY
-    mode_bits_size: int = 4
-    length_bits: int = len(data)
-    length_bits_size: int = get_character_count_indicator(Mode.BINARY, version)
-
+def to_binary(data: str) -> tuple[int, int]:
     encoding: ENCODING = ENCODING.LATIN1
     data_bytes: bytes
     try:
         data_bytes = data.encode(encoding.value)
-    except UnicodeEncodeError as e:
-        print("HEYY")
+    except UnicodeEncodeError:
         raise ValueError("Input data has to be LATIN-1 (ISO 8859-1) compliant.")
 
     data_stream: int = 0
@@ -145,24 +249,10 @@ def to_binary(data: str, version: int) -> str:
 
     data_size: int = 8 * len(data)
 
-    size: int = mode_bits_size + length_bits_size + data_size
-
-    bit_stream = 0
-    bit_stream |= mode_bits
-    bit_stream <<= length_bits_size
-    bit_stream |= length_bits
-    bit_stream <<= data_size
-    bit_stream |= data_stream
-
-    return bin(bit_stream)[2:].zfill(size)
+    return data_stream, data_size
 
 
-def to_kanji(data: str, version: int) -> str:
-    mode_bits: Mode = Mode.KANJI
-    mode_bits_size: int = 4
-    length_bits: int = len(data)
-    length_bits_size: int = get_character_count_indicator(Mode.KANJI, version)
-
+def to_kanji(data: str) -> tuple[int, int]:
     try:
         data_bytes = data.encode("shift-jis")
     except UnicodeError:
@@ -193,20 +283,10 @@ def to_kanji(data: str, version: int) -> str:
 
     data_size = 13 * len(data)
 
-    size = mode_bits_size + length_bits_size + data_size
-
-    bit_stream = 0
-    bit_stream |= mode_bits
-    bit_stream <<= length_bits_size
-    bit_stream |= length_bits
-    bit_stream <<= data_size
-    bit_stream |= data_stream
-
-    print(bin(bit_stream)[2:].zfill(size))
-
-    return bin(bit_stream)[2:].zfill(size)
+    return data_stream, data_size
 
 
+# FIXME: https://gcore.jsdelivr.net/gh/tonycrane/tonycrane.github.io/p/409d352d/ISO_IEC18004-2015.pdf#page=29 makes it confusing about the exact range. Cannot tell if 0xE37F would be valid...?
 def is_in_first_kanji_range(double_byte: int):
     return 0x8140 <= double_byte <= 0x9FFC
 

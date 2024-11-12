@@ -62,6 +62,7 @@ class QRCodeDrawer:
                 ).lock()
 
     def push_byte(self, byte_data: str) -> None:
+        # print("Pushing byte...")
         bit_arr = list(byte_data)
 
         while len(bit_arr) > 0:

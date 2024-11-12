@@ -22,11 +22,6 @@ def interleave(g1: list[list[T]], g2: list[list[T]]) -> list[T]:
     return interleaved_values
 
 
-# https://www.thonky.com/qr-code-tutorial/error-correction-coding
-def calculate_ec_generator_polynomial():
-    raise Exception("Not implemented")
-
-
 # https://www.arscreatio.com/repositorio/images/n_23/SC031-N-1915-18004Text.pdf#page=85
 def golay(version: int) -> str:
     seq: int = 18

@@ -195,8 +195,6 @@ class GFPolynomial:
             if v.x_power == x_power:
                 return v
 
-    # TODO: This assume we have same x power on all terms and same num of term, which is probably not a good assumption
-    # FIXME: I think this is what breaks when you have are missing an X term!
     def __xor__(self, other: "GFPolynomial") -> "GFPolynomial":
         new_values: list[GFValue] = []
         all_x_powers = set([*[v.x_power for v in self], *[v.x_power for v in other]])
