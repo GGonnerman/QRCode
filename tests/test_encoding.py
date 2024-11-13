@@ -36,6 +36,10 @@ class TestEncodingMethods(unittest.TestCase):
             "00100000001010011100111011100111001000010",
             encode("AC-42", version=1, mode=Mode.ALPHANUMERIC),
         )
+        self.assertRaises(
+            ValueError,
+            lambda: encode("Hello", version=1, mode=Mode.ALPHANUMERIC),
+        )
 
     def test_to_numeric(self):
         self.assertEqual(
@@ -46,11 +50,19 @@ class TestEncodingMethods(unittest.TestCase):
             "00010000000111110110001110000100101001",
             encode("8675309", version=1, mode=Mode.NUMERIC),
         )
+        self.assertRaises(
+            ValueError,
+            lambda: encode("1234 HI", version=1, mode=Mode.NUMERIC),
+        )
 
     def test_to_binary(self):
         self.assertEqual(
             "01000000110101001000011001010110110001101100011011110010110000100000011101110110111101110010011011000110010000100001",
             encode("Hello, world!", version=1, mode=Mode.BINARY),
+        )
+        self.assertRaises(
+            ValueError,
+            lambda: encode("П́ҦП̧П̑ҀԚ̆Р́", version=1, mode=Mode.BINARY),
         )
 
     def test_to_kanji(self):
@@ -58,12 +70,14 @@ class TestEncodingMethods(unittest.TestCase):
             "10000000001011010101010100011010010111",
             encode("茗荷", version=1, mode=Mode.KANJI),
         )
+        self.assertRaises(
+            ValueError,
+            lambda: encode("Hello", version=1, mode=Mode.KANJI),
+        )
 
     def test_lookup_data_codeword_capacity(self):
         self.assertEqual(1276, lookup_data_codeword_capacity(40, ErrorCorrection.HIGH))
-        self.assertEqual(
-            1812, lookup_data_codeword_capacity(35, ErrorCorrection.MEDIUM)
-        )
+        self.assertEqual(1812, lookup_data_codeword_capacity(35, ErrorCorrection.MEDIUM))
         self.assertEqual(861, lookup_data_codeword_capacity(20, ErrorCorrection.LOW))
         self.assertEqual(1276, lookup_data_codeword_capacity(40, ErrorCorrection.HIGH))
         self.assertEqual(13, lookup_data_codeword_capacity(1, ErrorCorrection.QUARTILE))

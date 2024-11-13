@@ -1,6 +1,7 @@
 from enum import StrEnum
 from typing import override, Callable
 from error_correction import ErrorCorrection
+from constants import data_codeword_capacity
 from mode import Mode
 import re
 
@@ -11,15 +12,14 @@ from utils import split_into_segments
 
 # https://www.arscreatio.com/repositorio/images/n_23/SC031-N-1915-18004Text.pdf#page=103
 def generate_most_efficient_modes(data: str, version: int):
+    raise NotImplementedError("Generating the most efficient mode has not yet been implemented")
     version_index = 0 if version <= 9 else 1 if version <= 26 else 2
     # Select initial mode
     mode: Mode
     if in_exclusive_subset(data[0], Mode.BINARY):
         mode = Mode.BINARY
     elif in_exclusive_subset(data[0], Mode.KANJI):
-        if in_exclusive_subset(data[1], Mode.NUMERIC) or in_exclusive_subset(
-            data[1], Mode.ALPHANUMERIC
-        ):
+        if in_exclusive_subset(data[1], Mode.NUMERIC) or in_exclusive_subset(data[1], Mode.ALPHANUMERIC):
             mode = Mode.KANJI
 
     mode = Mode.KANJI
@@ -39,11 +39,8 @@ def generate_most_efficient_modes(data: str, version: int):
             pass
 
 
-if __name__ == "__main__":
-    generate_most_efficient_modes("Hello, gamer!", 1)
-
-
 def in_exclusive_subset(character: str, mode: Mode):
+    raise NotImplementedError("Checking if a character is in the exclusive subset has not yet been implemented")
     if mode == Mode.NUMERIC:
         return 0x30 <= ord(character) <= 0x39
     elif mode == Mode.ALPHANUMERIC:
@@ -103,14 +100,10 @@ def in_exclusive_subset(character: str, mode: Mode):
         else:
             return False
     elif mode == Mode.KANJI:
-        return is_in_first_kanji_range(ord(character)) or is_in_second_kanji_range(
-            ord(character)
-        )
+        return is_in_first_kanji_range(ord(character)) or is_in_second_kanji_range(ord(character))
 
 
-# TODO: Either figure out ECI encoding or remove this
 class ENCODING(StrEnum):
-    UTF8 = "utf-8"
     LATIN1 = "iso-8859-1"
 
 
@@ -142,12 +135,10 @@ def get_character_count_indicator_length(mode: Mode, version: int) -> int:
             return 16
         elif mode == Mode.KANJI:
             return 12
-    else:
-        raise Exception(f"Invalid version number, {version}")
-    raise Exception(f"Unable to calculate character count indicator for mode {mode}")
+
+    raise Exception(f"Unable to calculate character count indicator for version {version} and mode {mode}")
 
 
-# TODO: Raise standardized exceptions when trying to encode invalid data
 def encode(data: str, version: int, mode: Mode) -> str:
     data_func: Callable[[str], tuple[int, int]]
 
@@ -160,9 +151,7 @@ def encode(data: str, version: int, mode: Mode) -> str:
     elif mode == Mode.KANJI:
         data_func = to_kanji
     else:
-        raise NotImplementedError(
-            f"Support for encoding type {mode} has not yet been implemented"
-        )
+        raise NotImplementedError(f"Support for encoding type {mode} has not yet been implemented")
 
     mode_bits: int = mode
     mode_bits_size: int = 4
@@ -183,7 +172,11 @@ def encode(data: str, version: int, mode: Mode) -> str:
 
 # https://www.arscreatio.com/repositorio/images/n_23/SC031-N-1915-18004Text.pdf#page=33
 def to_alphanumeric(data: str) -> tuple[int, int]:
-    base45_data = [lookup_alphanumeric_value(c) for c in data]
+    try:
+        base45_data = [lookup_alphanumeric_value(c) for c in data]
+    except ValueError:
+        raise ValueError(f"Attempted to encode {data} with alphanumeric mode, but not all characters are compatible")
+
     bit_data = 0
     for i in range(0, len(base45_data), 2):
         current_data = base45_data[i]
@@ -205,6 +198,9 @@ def lookup_alphanumeric_value(character: str) -> int:
 
 
 def to_numeric(data: str) -> tuple[int, int]:
+    if not data.isnumeric():
+        raise ValueError
+
     digit_groups: list[str] = re.findall(".{1,3}", data)
 
     data_bits: int = 0
@@ -244,10 +240,11 @@ def to_binary(data: str) -> tuple[int, int]:
 
     data_stream: int = 0
     for byte in data_bytes:
+        # byte -= 0x20
         data_stream <<= 8
         data_stream |= byte
 
-    data_size: int = 8 * len(data)
+    data_size: int = 8 * len(data_bytes)
 
     return data_stream, data_size
 
@@ -269,9 +266,7 @@ def to_kanji(data: str) -> tuple[int, int]:
         elif is_in_second_kanji_range(double_byte):
             double_byte -= 0xC140
         else:
-            raise Exception(
-                "All kanji data has to be in double byte range 0x8140 to 0x9FFC or 0xE040 to 0xEBBF"
-            )
+            raise Exception("All kanji data has to be in double byte range 0x8140 to 0x9FFC or 0xE040 to 0xEBBF")
 
         msb = (double_byte & 0xFF00) >> 8
         lsb = double_byte & 0x00FF
@@ -286,7 +281,7 @@ def to_kanji(data: str) -> tuple[int, int]:
     return data_stream, data_size
 
 
-# FIXME: https://gcore.jsdelivr.net/gh/tonycrane/tonycrane.github.io/p/409d352d/ISO_IEC18004-2015.pdf#page=29 makes it confusing about the exact range. Cannot tell if 0xE37F would be valid...?
+# WARNING: https://gcore.jsdelivr.net/gh/tonycrane/tonycrane.github.io/p/409d352d/ISO_IEC18004-2015.pdf#page=29 makes it confusing about the exact range. Cannot tell if 0xE37F would be valid...?
 def is_in_first_kanji_range(double_byte: int):
     return 0x8140 <= double_byte <= 0x9FFC
 
@@ -295,6 +290,7 @@ def is_in_second_kanji_range(double_byte: int):
     return 0xE040 <= double_byte <= 0xEBBF
 
 
+# TODO: I want Groups and CodewordBlockInformation to be better
 class Group:
     block_count: int
     codeword_count_per_block: int
@@ -334,12 +330,8 @@ class CodewordBlockInformation:
         self.ec_level = ec_level
         self.number_of_data_codewords = number_of_data_codewords
         self.ec_codewords_per_block = ec_codewords_per_block
-        self.group_1 = Group(
-            number_of_blocks_in_group_1, number_of_codewords_in_each_block_group_1
-        )
-        self.group_2 = Group(
-            number_of_blocks_in_group_2, number_of_codewords_in_each_block_group_2
-        )
+        self.group_1 = Group(number_of_blocks_in_group_1, number_of_codewords_in_each_block_group_1)
+        self.group_2 = Group(number_of_blocks_in_group_2, number_of_codewords_in_each_block_group_2)
 
     @classmethod
     def from_line(cls, line: str) -> "CodewordBlockInformation":
@@ -394,16 +386,12 @@ class CodewordBlockInformation:
     @override
     def __eq__(self, other: object):
         if not isinstance(other, CodewordBlockInformation):
-            raise Exception(
-                "Cannot compare equality of CodewordBlockInformation and {other.__class__.__name__}"
-            )
+            raise Exception("Cannot compare equality of CodewordBlockInformation and {other.__class__.__name__}")
 
         return self.version == other.version and self.ec_level == other.ec_level
 
 
-def get_codeword_block_information(
-    version: int, ec_level: ErrorCorrection
-) -> CodewordBlockInformation:
+def get_codeword_block_information(version: int, ec_level: ErrorCorrection) -> CodewordBlockInformation:
     # TODO: Make this whole thing a lot less bad
     codeword_block_information: list[CodewordBlockInformation] = [
         CodewordBlockInformation.from_line(line)
@@ -579,59 +567,12 @@ def get_codeword_block_information(
 
 
 # https://gcore.jsdelivr.net/gh/tonycrane/tonycrane.github.io/p/409d352d/ISO_IEC18004-2015.pdf#page=41
-# I could not function a generator functio for these values, so you get a huge table. I'm sorry.
-def lookup_data_codeword_capacity(
-    version: int, error_correction_level: ErrorCorrection
-) -> int:
-    i = {
+def lookup_data_codeword_capacity(version: int, error_correction_level: ErrorCorrection) -> int:
+    error_correction_index = {
         ErrorCorrection.LOW: 0,
         ErrorCorrection.MEDIUM: 1,
         ErrorCorrection.QUARTILE: 2,
         ErrorCorrection.HIGH: 3,
     }[error_correction_level]
 
-    return [
-        # I want it in order [Medium, Low, High, Quartile],
-        # I will put it in order [Low, Medium, Quartile, High]
-        [],
-        [19, 16, 13, 9],
-        [34, 28, 22, 16],
-        [55, 44, 34, 26],
-        [80, 64, 48, 36],
-        [108, 86, 62, 46],
-        [136, 108, 76, 60],
-        [156, 124, 88, 66],
-        [194, 154, 110, 86],
-        [232, 182, 132, 100],
-        [274, 216, 154, 122],
-        [324, 254, 180, 140],
-        [370, 290, 206, 158],
-        [428, 334, 244, 180],
-        [461, 365, 261, 197],
-        [523, 415, 295, 223],
-        [589, 453, 325, 253],
-        [647, 507, 367, 283],
-        [721, 563, 397, 313],
-        [795, 627, 445, 341],
-        [861, 669, 485, 385],
-        [932, 714, 512, 406],
-        [1006, 782, 568, 442],
-        [1094, 860, 614, 464],
-        [1174, 914, 664, 514],
-        [1276, 1000, 718, 538],
-        [1370, 1062, 754, 596],
-        [1468, 1128, 808, 628],
-        [1531, 1193, 871, 661],
-        [1631, 1267, 911, 701],
-        [1735, 1373, 985, 745],
-        [1843, 1455, 1033, 793],
-        [1955, 1541, 1115, 845],
-        [2071, 1631, 1171, 901],
-        [2191, 1725, 1231, 961],
-        [2306, 1812, 1286, 986],
-        [2434, 1914, 1354, 1054],
-        [2566, 1992, 1426, 1096],
-        [2702, 2102, 1502, 1142],
-        [2812, 2216, 1582, 1222],
-        [2956, 2334, 1666, 1276],
-    ][version][i]
+    return data_codeword_capacity[version][error_correction_index]

@@ -1,4 +1,5 @@
 from color import BLACK, WHITE
+from functools import cache
 from typing import TypeVar
 from itertools import zip_longest
 
@@ -58,17 +59,43 @@ def calculate_crc(polynomial: int, value: int, seq: int, data: int) -> str:
     return f"{bin(value)[2:].zfill(data)}{bin(current)[2:].zfill(seq - data)}"
 
 
-def to_color(i: object) -> tuple[int, int, int]:
-    if i == "1":
+def to_color(obj: object) -> tuple[int, int, int]:
+    if obj == "1":
         return BLACK
-    if i == "0":
+    if obj == "0":
         return WHITE
-    if i == 1:
+    if obj == 1:
         return BLACK
-    if i == 0:
+    if obj == 0:
         return WHITE
     raise Exception("Unable to convert to color")
 
 
-if __name__ == "__main__":
-    print(bose_chaudhuri_hocquenghem(0b10011))
+def from_power(value: int) -> int:
+    from_power_table, _ = generate_log_antilog_table()
+    return from_power_table[value]
+
+
+def to_power(value: int) -> int:
+    _, to_power_table = generate_log_antilog_table()
+    return to_power_table[value]
+
+
+@cache
+def generate_log_antilog_table() -> tuple[dict[int, int], dict[int, int]]:
+    generator_polynomial: int = 0b100011101
+    from_power: dict[int, int] = {}
+    for i in range(255):
+        if i < 8:
+            from_power[i] = 2**i
+        else:
+            current: int = from_power[i - 1] * 2
+            if current >= 256:
+                current ^= generator_polynomial
+            from_power[i] = current
+
+    to_power: dict[int, int] = {}
+    for k, v in from_power.items():
+        to_power[v] = k
+
+    return (from_power, to_power)

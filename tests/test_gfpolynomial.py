@@ -1,6 +1,7 @@
 import unittest
 
-from polynomials import GFValue, GFPolynomial
+from gfvalue import GFValue
+from gfpolynomial import GFPolynomial
 
 
 class TestEncodingMethods(unittest.TestCase):
@@ -27,17 +28,13 @@ class TestEncodingMethods(unittest.TestCase):
         )
         self.assertEqual(
             a,
-            GFPolynomial(
-                GFValue(0, 3), GFValue(198, 2), GFValue(199, 1), GFValue(3, 0)
-            ),
+            GFPolynomial(GFValue(0, 3), GFValue(198, 2), GFValue(199, 1), GFValue(3, 0)),
         )
 
     def test_GFPolynomial_add(self):
         a = GFPolynomial(GFValue(0, 2), GFValue(0, 1))
         b = GFPolynomial(GFValue(1, 1), GFValue(1, 0))
-        self.assertEqual(
-            GFPolynomial(GFValue(0, 2), GFValue(25, 1), GFValue(1, 0)), a + b
-        )
+        self.assertEqual(GFPolynomial(GFValue(0, 2), GFValue(25, 1), GFValue(1, 0)), a + b)
 
     def test_GFPolynomial_mul(self):
         a = GFPolynomial(GFValue(0, 2), GFValue(25, 1), GFValue(1, 0))
@@ -48,9 +45,7 @@ class TestEncodingMethods(unittest.TestCase):
         f = GFPolynomial(GFValue(0, 1), GFValue(6, 0))
         g = GFPolynomial(GFValue(0, 1), GFValue(7, 0))
         self.assertEqual(
-            GFPolynomial(
-                GFValue(0, 3), GFValue(198, 2), GFValue(199, 1), GFValue(3, 0)
-            ),
+            GFPolynomial(GFValue(0, 3), GFValue(198, 2), GFValue(199, 1), GFValue(3, 0)),
             a * b,
         )
         self.assertEqual(
@@ -108,9 +103,7 @@ class TestEncodingMethods(unittest.TestCase):
             GFValue(0, 3),
             GFValue(25, 2),
         )
-        self.assertEqual(
-            list(a), [GFValue(0, 3), GFValue(198, 2), GFValue(199, 1), GFValue(3, 0)]
-        )
+        self.assertEqual(list(a), [GFValue(0, 3), GFValue(198, 2), GFValue(199, 1), GFValue(3, 0)])
 
     def test_GFPolynomial_getitem(self):
         gf = GFPolynomial(
@@ -236,7 +229,3 @@ class TestEncodingMethods(unittest.TestCase):
 
         self.assertEqual(o, mes ^ gen)
         self.assertEqual(o, gen ^ mes)
-
-    # def test_GFPolynomial_from_a_value(self):
-    #    self.assertEqual(GFPolynomial(25, 1), GFPolynomial.from_a_value(3, 1))
-    #    self.assertEqual(GFPolynomial(198, 1), GFPolynomial.from_a_value(7, 1))

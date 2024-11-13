@@ -1,31 +1,26 @@
-import os
-from qrcode_drawer import QRCodeDrawer
-from itertools import zip_longest
-from polynomials import (
-    generate_message_polynomial,
-    generate_error_correction_codewords,
-)
-import re
 from math import ceil, floor
-from mode import Mode
+import os
+import re
+from typing import override
+
 from PIL import Image
-from color import BLACK, BLUE, WHITE, GREEN
+
 from anchor_position import AnchorPosition
-from mask_pattern import MaskPattern
-from error_correction import ErrorCorrection
+from color import BLACK, GREEN, WHITE
 from constants import alignment_patterns_locations
-from utils import golay, interleave, to_color, bose_chaudhuri_hocquenghem
 from encoding import (
     CodewordBlockInformation,
     encode,
-    to_alphanumeric,
-    to_binary,
-    to_kanji,
-    to_numeric,
-    lookup_data_codeword_capacity,
     get_codeword_block_information,
+    lookup_data_codeword_capacity,
 )
+from error_correction import ErrorCorrection
+from mask_pattern import MaskPattern
+from mode import Mode
+from polynomials import generate_error_correction_codewords, generate_message_polynomial
+from qrcode_drawer import QRCodeDrawer
 from square import Square
+from utils import bose_chaudhuri_hocquenghem, golay, interleave, to_color
 
 # TODO: Have this QRCode class be no frills, then make a SimpleQRCode subclass which does lots of the stuff for you
 
@@ -49,12 +44,11 @@ from square import Square
 
 
 class QRCode:
-    _version: int | None = None  # 1 <= V <= 40
+    _version: int | None = None
     size: int | None = None
     error_correction_level: ErrorCorrection | None = None
     _mask_pattern: int | None = None
     data: list[tuple[Mode, str]] = []
-    # TODO: I don't really like initializing it like this, the type checker wants me to though
     matrix: list[list[Square]] = [[]]
     drawer: QRCodeDrawer | None = None
 
@@ -65,18 +59,12 @@ class QRCode:
         mask_pattern: int | None = None,
     ):
         self.version = version
+        # size is automatically set when version is updated
         self.error_correction_level = error_correction_level
         self.mask_pattern = mask_pattern
 
-    def _validate_setup(self) -> None:
-        if self.version is None or self.size is None:
-            raise ValueError("Cannot run function while not setup")
-        if self.drawer is None:
-            raise ValueError("Cannot run function without a drawer")
-
+    # TODO: Possibly add some length checking, possibly unnecessary
     def add_data(self, data: str, mode: Mode) -> None:
-        # TODO: Some sort of length validation for all modes
-        # TODO: Some sort of whole data validation maybe? I probably want an Encoding class with abstract methods which are imlemented?
         self.data.append((mode, data))
 
     def generate(self) -> None:
@@ -94,7 +82,7 @@ class QRCode:
         self._add_format_information_area()
 
     @property
-    def version(self):
+    def version(self) -> int | None:
         return self._version
 
     @version.setter
@@ -106,12 +94,10 @@ class QRCode:
             self._version = version
             self.size = (4 * version) + 17
         else:
-            raise ValueError(
-                f"Cannot set version. {version} is an invalid version number."
-            )
+            raise ValueError(f"Cannot set version. {version} is an invalid version number.")
 
     @property
-    def mask_pattern(self):
+    def mask_pattern(self) -> int | None:
         return self._mask_pattern
 
     @mask_pattern.setter
@@ -121,13 +107,12 @@ class QRCode:
         elif 0 <= mask_pattern <= 7:
             self._mask_pattern = mask_pattern
         else:
-            raise ValueError(
-                f"Cannot set mask pattern {mask_pattern}. Expected to be None (auto) or an integer 0-7"
-            )
+            raise ValueError(f"Cannot set mask pattern {mask_pattern}. Expected to be None (auto) or an integer 0-7")
 
     def _generate_matrix(self) -> None:
         if self.size is None:
             raise ValueError(f"Cannot initialize a matrix with version {self.version}")
+
         self.matrix = [[Square() for _ in range(self.size)] for _ in range(self.size)]
 
     def _add_finder_patterns(self) -> None:
@@ -167,9 +152,8 @@ class QRCode:
         self.drawer.place_artifact(separator_pattern, AnchorPosition.TOP_RIGHT)
         self.drawer.place_artifact(separator_pattern, AnchorPosition.BOTTOM_LEFT)
 
+    # From https://www.arscreatio.com/repositorio/images/n_23/SC031-N-1915-18004Text.pdf#page=87
     def _add_alignment_patterns(self) -> None:
-        # From https://www.arscreatio.com/repositorio/images/n_23/SC031-N-1915-18004Text.pdf#page=87
-
         if self.version is None or self.size is None:
             raise ValueError("Cannot run function while not setup")
         if self.drawer is None:
@@ -185,6 +169,8 @@ class QRCode:
             [BLACK, BLACK, BLACK, BLACK, BLACK],
         ]
 
+        # For every possible cross of locations, attempt to place an alignment
+        # pattern there is it does not overlap with anything
         for row in locations:
             for col in locations:
                 if self._check_overlap_exists(row, col, len(alignment_pattern) // 2):
@@ -197,12 +183,7 @@ class QRCode:
                 )
 
     def _check_overlap_exists(self, row: int, col: int, radius: int) -> bool:
-        return (
-            self.matrix[row + radius][col - radius].is_locked()
-            or self.matrix[row + radius][col + radius].is_locked()
-            or self.matrix[row - radius][col - radius].is_locked()
-            or self.matrix[row - radius][col + radius].is_locked()
-        )
+        return self.matrix[row + radius][col - radius].is_locked() or self.matrix[row + radius][col + radius].is_locked() or self.matrix[row - radius][col - radius].is_locked() or self.matrix[row - radius][col + radius].is_locked()
 
     def _add_timing_patterns(self):
         if self.version is None or self.size is None:
@@ -244,9 +225,7 @@ class QRCode:
             return
 
         if self.drawer is None:
-            raise ValueError(
-                "Cannot add version information area with a NoneType drawer"
-            )
+            raise ValueError("Cannot add version information area with a NoneType drawer")
 
         code = list(reversed(golay(self.version)))
         version_artifact: list[list[tuple[int, int, int] | None]] = [
@@ -258,16 +237,12 @@ class QRCode:
             [to_color(c) for c in code[15:18]],
         ]
 
-        self.drawer.place_artifact(
-            version_artifact, AnchorPosition.TOP_LEFT, padding_column=self.size - 11
-        )
+        self.drawer.place_artifact(version_artifact, AnchorPosition.TOP_LEFT, padding_column=self.size - 11)
 
         # Rotate the array (modified from https://stackoverflow.com/a/8421412)
         version_artifact = list(zip(*version_artifact))
 
-        self.drawer.place_artifact(
-            version_artifact, AnchorPosition.TOP_LEFT, padding_row=self.size - 11
-        )
+        self.drawer.place_artifact(version_artifact, AnchorPosition.TOP_LEFT, padding_row=self.size - 11)
 
     def _add_data(self):
         if self.version is None:
@@ -277,23 +252,20 @@ class QRCode:
         if self.error_correction_level is None:
             raise Exception("Cannot add data when error correction level is None")
         # TODO: Likely in SimpleQRCode here is the algorithm for getting the best/most efficient mores https://gcore.jsdelivr.net/gh/tonycrane/tonycrane.github.io/p/409d352d/ISO_IEC18004-2015.pdf#C062021e.indd%3AAnnex%20sec_J%3A60&page=108
-        bit_stream: str = ""
+        # t_stream: str = "011100011010"
+        bit_stream: str = "011100011010"
 
         for mode, data in self.data:
             # TODO: Implement all other string types and do some checking for data length/type
             bit_stream += encode(data, self.version, mode)
 
-        data_codewords: int = lookup_data_codeword_capacity(
-            self.version, self.error_correction_level
-        )
+        data_codewords: int = lookup_data_codeword_capacity(self.version, self.error_correction_level)
 
         bits_required: int = data_codewords * 8
 
         maximum_terminator_length: int = 4
 
-        terminator_required: int = min(
-            bits_required, len(bit_stream) + maximum_terminator_length
-        )
+        terminator_required: int = min(bits_required, len(bit_stream) + maximum_terminator_length)
 
         bit_stream = bit_stream.ljust(terminator_required, "0")
 
@@ -311,12 +283,8 @@ class QRCode:
 
         # print(bit_stream)
 
-        if (len(bit_stream)) / 8 > lookup_data_codeword_capacity(
-            self.version, self.error_correction_level
-        ):
-            raise Exception(
-                f"Too much data to be properly stored in qrcode of version {self.version} with error correction level {self.error_correction_level.name}"
-            )
+        if (len(bit_stream)) / 8 > lookup_data_codeword_capacity(self.version, self.error_correction_level):
+            raise Exception(f"Too much data to be properly stored in qrcode of version {self.version} with error correction level {self.error_correction_level.name}")
 
         self._add_error_correction_code(bit_stream)
 
@@ -346,11 +314,7 @@ class QRCode:
 
         # If version is above 2, need to break data in multiple blocks
 
-        # data_str = "0100001101010101010001101000011001010111001001100101010111000010011101110011001000000110000100100000011001100111001001101111011011110110010000100000011101110110100001101111001000000111001001100101011000010110110001101100011110010010000001101011011011100110111101110111011100110010000001110111011010000110010101110010011001010010000001101000011010010111001100100000011101000110111101110111011001010110110000100000011010010111001100100001000011101100000100011110110000010001111011000001000111101100"
-
-        cwblock_info: CodewordBlockInformation = get_codeword_block_information(
-            self.version, self.error_correction_level
-        )
+        cwblock_info: CodewordBlockInformation = get_codeword_block_information(self.version, self.error_correction_level)
 
         # TODO: I think here I exclude data that would push us over the edge, but I don't think that's good
         # Split the data str into code words (8 bits)
@@ -363,89 +327,32 @@ class QRCode:
         group_1: list[list[str]] = []
         # Split those groups into blocks
         for i in range(cwblock_info.group_1.block_count):
-            group_1.append(
-                group_1_full[: cwblock_info.group_1.codeword_count_per_block]
-            )
+            group_1.append(group_1_full[: cwblock_info.group_1.codeword_count_per_block])
             group_1_full = group_1_full[cwblock_info.group_1.codeword_count_per_block :]
 
         group_2: list[list[str]] = []
         # Split those groups into blocks
         for i in range(cwblock_info.group_2.block_count):
-            group_2.append(
-                group_2_full[: cwblock_info.group_2.codeword_count_per_block]
-            )
+            group_2.append(group_2_full[: cwblock_info.group_2.codeword_count_per_block])
             group_2_full = group_2_full[cwblock_info.group_2.codeword_count_per_block :]
-
-        # group_1 = [
-        #    group_1[: cwblock_info.group_1.codeword_count_per_block],
-        #    group_1[cwblock_info.group_1.codeword_count_per_block :],
-        # ]
-
-        # group_2 = [
-        #     group_2_full[: cwblock_info.group_2.codeword_count_per_block],
-        #     group_2_full[cwblock_info.group_2.codeword_count_per_block :],
-        # ]
-
-        # TODO: For now this is hard coding that version = 0 and there is only 1 group with 1 block
-
-        # Genereate the message polynomial for our block
-
-        # ec_int_blocks = []
 
         # This is new
 
-        group_1_message_polynomials = [
-            generate_message_polynomial(block) for block in group_1
-        ]
-        group_2_message_polynomials = [
-            generate_message_polynomial(block) for block in group_2
-        ]
+        group_1_message_polynomials = [generate_message_polynomial(block) for block in group_1]
+        group_2_message_polynomials = [generate_message_polynomial(block) for block in group_2]
 
-        group_1_ec = [
-            generate_error_correction_codewords(
-                mp_coeff, cwblock_info.ec_codewords_per_block
-            ).as_integers()
-            for mp_coeff in group_1_message_polynomials
-        ]
+        group_1_ec = [generate_error_correction_codewords(mp_coeff, cwblock_info.ec_codewords_per_block).as_integers() for mp_coeff in group_1_message_polynomials]
 
-        group_2_ec = [
-            generate_error_correction_codewords(
-                mp_coeff, cwblock_info.ec_codewords_per_block
-            ).as_integers()
-            for mp_coeff in group_2_message_polynomials
-        ]
-
-        # This was there before
-
-        # message_polynomial_coefficients = generate_message_polynomial(group_1[0])
-        ## message_polynomial_coefficients = generate_message_polynomial(group_1[0])
-
-        ## Perform the long division to get the error correction codewords
-        # error_correction_polynomial_ints = generate_error_correction_codewords(
-        #    message_polynomial_coefficients, cwblock_info.ec_codewords_per_block
-        # ).as_integers()
-
-        # print("Printing ec bits...")
-        # print([x for x in group_1_ec])
-        # print([x for x in group_2_ec])
+        group_2_ec = [generate_error_correction_codewords(mp_coeff, cwblock_info.ec_codewords_per_block).as_integers() for mp_coeff in group_2_message_polynomials]
 
         interleaving_data: list[str] = interleave(group_1, group_2)
         interleaving_ec_integers: list[int] = interleave(group_1_ec, group_2_ec)
-        interleaving_ec: list[str] = [
-            bin(value)[2:].zfill(8) for value in interleaving_ec_integers
-        ]
-
-        # # Convert those ints to codeword string (8 bits)
-        # error_correction_str = "".join(
-        #     [str(bin(x))[2:].zfill(8) for x in error_correction_polynomial_ints]
-        # )
+        interleaving_ec: list[str] = [bin(value)[2:].zfill(8) for value in interleaving_ec_integers]
 
         bit_stream = "".join(interleaving_data) + "".join(interleaving_ec)
 
         # Add remainder bits if required
         bit_stream += "0" * self._get_required_remainder_bits()
-
-        # print(bit_stream)
 
         self.drawer.push_byte(bit_stream)
 
@@ -505,19 +412,12 @@ class QRCode:
 
     def _apply_data_mask(self):
         if self.size is None:
-            raise ValueError(
-                f"Cannot apply data mask on qrcode of version {self.version}"
-            )
+            raise ValueError(f"Cannot apply data mask on qrcode of version {self.version}")
         for row in range(self.size):
             for col in range(self.size):
-                alternate_color = (
-                    WHITE if self.matrix[row][col].get_color() == BLACK else BLACK
-                )
+                alternate_color = WHITE if self.matrix[row][col].get_color() == BLACK else BLACK
 
-                if (
-                    self.matrix[row][col].is_reserved()
-                    or self.matrix[row][col].is_locked()
-                ):
+                if self.matrix[row][col].is_reserved() or self.matrix[row][col].is_locked():
                     continue
 
                 if self.mask_pattern is None:
@@ -541,7 +441,7 @@ class QRCode:
 
         format_string = bose_chaudhuri_hocquenghem(format_data).zfill(15)
 
-        paths = [
+        paths: list[list[list[int]]] = [
             [
                 [8, 0],
                 [8, 1],
@@ -697,12 +597,7 @@ class QRCode:
         print(f"Penalty condition 4 is {penalty}")
         return penalty
 
-    def write_to_png(
-        self,
-        file_name: str | None = None,
-        destination_folder: str | None = None,
-        border: int = 4,
-    ) -> None:
+    def write_to_png(self, file_name: str | None = None, destination_folder: str | None = None, border: int = 4) -> None:
         if self.version is None or self.size is None:
             raise ValueError("Cannot run function while not setup")
 
@@ -710,9 +605,7 @@ class QRCode:
         file_name = file_name or "qrcode.png"
         file_path = os.path.join(destination_folder, file_name)
 
-        img = Image.new(
-            mode="RGBA", size=(self.size + 2 * border, self.size + 2 * border)
-        )
+        img = Image.new(mode="RGBA", size=(self.size + 2 * border, self.size + 2 * border))
         pixels = img.load()
 
         if pixels is None:
@@ -727,23 +620,26 @@ class QRCode:
                 pixels[col + border, row + border] = self.matrix[row][col].get_color()
 
         if os.path.exists(destination_folder) and not os.path.isdir(destination_folder):
-            raise Exception(
-                f"Destination folder ({destination_folder}) appears to be a file. It must be deleted or destionation_folder must be changed so a folder can be created"
-            )
+            raise Exception(f"Destination folder ({destination_folder}) appears to be a file. It must be deleted or destionation_folder must be changed so a folder can be created")
         elif os.path.exists(file_path) and not os.path.isfile(file_path):
-            raise Exception(
-                f"Destination path ({file_path}) appears to be a directory. It must be deleted or either destination_folder or file_name must be changed so a file can be created"
-            )
+            raise Exception(f"Destination path ({file_path}) appears to be a directory. It must be deleted or either destination_folder or file_name must be changed so a file can be created")
 
         if not os.path.exists(destination_folder):
             os.mkdir(destination_folder)
 
         img.save(file_path)
 
+    @override
+    def __str__(self) -> str:
+        rows: list[str] = []
+        for row in self.matrix:
+            rows.append("".join([str(v) for v in row]))
+        return "".join(rows)
+
 
 if __name__ == "__main__":
     qrcode = QRCode(
-        version=9,
+        version=5,
         error_correction_level=ErrorCorrection.LOW,
         mask_pattern=0b111,
     )
@@ -755,6 +651,13 @@ if __name__ == "__main__":
     qrcode.add_data("1", Mode.NUMERIC)
     qrcode.add_data(" BEST FOOTBALL TEAM", Mode.ALPHANUMERIC)
     qrcode.add_data("!!!", Mode.BINARY)
-    qrcode.add_data("HELLO WORLD", Mode.ALPHANUMERIC)
+    # qrcode.add_data("HELLO WORLá", Mode.BINARY)
+    # qrcode.add_data("işçöá", Mode.BINARY)
+    # qrcode.add_data("hello", Mode.BINARY)
+    # qrcode.add_data("ΑΒΓΔΕ", Mode.BINARY)
+    # qrcode.add_data("مرحبا بالعالم", Mode.BINARY)
     qrcode.generate()
     qrcode.write_to_png()
+    print("About to string")
+    print(str(qrcode))
+    print("Completed qrcode")
