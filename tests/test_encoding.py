@@ -6,12 +6,8 @@ from mode import Mode
 from encoding import (
     encode,
     lookup_alphanumeric_value,
-    to_alphanumeric,
     get_character_count_indicator_length,
-    lookup_data_codeword_capacity,
-    to_binary,
-    to_kanji,
-    to_numeric,
+    get_data_codeword_capacity,
 )
 
 
@@ -76,10 +72,10 @@ class TestEncodingMethods(unittest.TestCase):
         )
 
     def test_lookup_data_codeword_capacity(self):
-        self.assertEqual(1276, lookup_data_codeword_capacity(40, ErrorCorrection.HIGH))
-        self.assertEqual(1812, lookup_data_codeword_capacity(35, ErrorCorrection.MEDIUM))
-        self.assertEqual(861, lookup_data_codeword_capacity(20, ErrorCorrection.LOW))
-        self.assertEqual(1276, lookup_data_codeword_capacity(40, ErrorCorrection.HIGH))
-        self.assertEqual(13, lookup_data_codeword_capacity(1, ErrorCorrection.QUARTILE))
-        self.assertEqual(46, lookup_data_codeword_capacity(5, ErrorCorrection.HIGH))
-        self.assertEqual(721, lookup_data_codeword_capacity(18, ErrorCorrection.LOW))
+        self.assertEqual(1276, get_data_codeword_capacity(40, ErrorCorrection.HIGH))
+        self.assertEqual(1812, get_data_codeword_capacity(35, ErrorCorrection.MEDIUM))
+        self.assertEqual(861, get_data_codeword_capacity(20, ErrorCorrection.LOW))
+        self.assertEqual(1276, get_data_codeword_capacity(40, ErrorCorrection.HIGH))
+        self.assertEqual(13, get_data_codeword_capacity(1, ErrorCorrection.QUARTILE))
+        self.assertEqual(46, get_data_codeword_capacity(5, ErrorCorrection.HIGH))
+        self.assertEqual(721, get_data_codeword_capacity(18, ErrorCorrection.LOW))

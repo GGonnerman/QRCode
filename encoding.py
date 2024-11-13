@@ -1,4 +1,5 @@
 from enum import StrEnum
+from logging import error
 from typing import override, Callable
 from error_correction import ErrorCorrection
 from constants import data_codeword_capacity
@@ -105,6 +106,7 @@ def in_exclusive_subset(character: str, mode: Mode):
 
 class ENCODING(StrEnum):
     LATIN1 = "iso-8859-1"
+    SHIFTJIS = "shift-jis"
 
 
 def get_character_count_indicator_length(mode: Mode, version: int) -> int:
@@ -251,7 +253,7 @@ def to_binary(data: str) -> tuple[int, int]:
 
 def to_kanji(data: str) -> tuple[int, int]:
     try:
-        data_bytes = data.encode("shift-jis")
+        data_bytes = data.encode(ENCODING.SHIFTJIS)
     except UnicodeError:
         raise ValueError("Input data has to be shift-jis compliant.")
 
@@ -268,25 +270,25 @@ def to_kanji(data: str) -> tuple[int, int]:
         else:
             raise Exception("All kanji data has to be in double byte range 0x8140 to 0x9FFC or 0xE040 to 0xEBBF")
 
-        msb = (double_byte & 0xFF00) >> 8
-        lsb = double_byte & 0x00FF
+        msb: int = (double_byte & 0xFF00) >> 8
+        lsb: int = double_byte & 0x00FF
 
-        resulting_binary = msb * 0xC0 + lsb
+        resulting_binary: int = msb * 0xC0 + lsb
 
         data_stream <<= 13
         data_stream |= resulting_binary
 
-    data_size = 13 * len(data)
+    data_size: int = 13 * len(data)
 
     return data_stream, data_size
 
 
 # WARNING: https://gcore.jsdelivr.net/gh/tonycrane/tonycrane.github.io/p/409d352d/ISO_IEC18004-2015.pdf#page=29 makes it confusing about the exact range. Cannot tell if 0xE37F would be valid...?
-def is_in_first_kanji_range(double_byte: int):
+def is_in_first_kanji_range(double_byte: int) -> bool:
     return 0x8140 <= double_byte <= 0x9FFC
 
 
-def is_in_second_kanji_range(double_byte: int):
+def is_in_second_kanji_range(double_byte: int) -> bool:
     return 0xE040 <= double_byte <= 0xEBBF
 
 
@@ -567,7 +569,7 @@ def get_codeword_block_information(version: int, ec_level: ErrorCorrection) -> C
 
 
 # https://gcore.jsdelivr.net/gh/tonycrane/tonycrane.github.io/p/409d352d/ISO_IEC18004-2015.pdf#page=41
-def lookup_data_codeword_capacity(version: int, error_correction_level: ErrorCorrection) -> int:
+def get_data_codeword_capacity(version: int, error_correction_level: ErrorCorrection) -> int:
     error_correction_index = {
         ErrorCorrection.LOW: 0,
         ErrorCorrection.MEDIUM: 1,
@@ -576,3 +578,7 @@ def lookup_data_codeword_capacity(version: int, error_correction_level: ErrorCor
     }[error_correction_level]
 
     return data_codeword_capacity[version][error_correction_index]
+
+
+def get_data_bit_capacity(version: int, error_correction_level: ErrorCorrection) -> int:
+    return get_data_codeword_capacity(version, error_correction_level) * 8

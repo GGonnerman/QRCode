@@ -1,8 +1,10 @@
+from abc import ABC, abstractmethod
 from math import ceil, floor
 import os
 import re
-from typing import override
+from typing import overload, override
 
+from encoding import ENCODING, lookup_alphanumeric_value
 from PIL import Image
 
 from anchor_position import AnchorPosition
@@ -12,7 +14,8 @@ from encoding import (
     CodewordBlockInformation,
     encode,
     get_codeword_block_information,
-    lookup_data_codeword_capacity,
+    get_data_bit_capacity,
+    get_data_codeword_capacity,
 )
 from error_correction import ErrorCorrection
 from mask_pattern import MaskPattern
@@ -43,12 +46,11 @@ from utils import bose_chaudhuri_hocquenghem, golay, interleave, to_color
 #    return wrapper
 
 
-class QRCode:
+class AbstractQRCode(ABC):
     _version: int | None = None
     size: int | None = None
     error_correction_level: ErrorCorrection | None = None
     _mask_pattern: int | None = None
-    data: list[tuple[Mode, str]] = []
     matrix: list[list[Square]] = [[]]
     drawer: QRCodeDrawer | None = None
 
@@ -62,10 +64,6 @@ class QRCode:
         # size is automatically set when version is updated
         self.error_correction_level = error_correction_level
         self.mask_pattern = mask_pattern
-
-    # TODO: Possibly add some length checking, possibly unnecessary
-    def add_data(self, data: str, mode: Mode) -> None:
-        self.data.append((mode, data))
 
     def generate(self) -> None:
         self._generate_matrix()
@@ -244,6 +242,10 @@ class QRCode:
 
         self.drawer.place_artifact(version_artifact, AnchorPosition.TOP_LEFT, padding_row=self.size - 11)
 
+    @abstractmethod
+    def _make_data_stream(self) -> str:
+        pass
+
     def _add_data(self):
         if self.version is None:
             raise Exception("Cannot add data when version is None")
@@ -252,41 +254,43 @@ class QRCode:
         if self.error_correction_level is None:
             raise Exception("Cannot add data when error correction level is None")
         # TODO: Likely in SimpleQRCode here is the algorithm for getting the best/most efficient mores https://gcore.jsdelivr.net/gh/tonycrane/tonycrane.github.io/p/409d352d/ISO_IEC18004-2015.pdf#C062021e.indd%3AAnnex%20sec_J%3A60&page=108
-        # t_stream: str = "011100011010"
-        bit_stream: str = "011100011010"
 
-        for mode, data in self.data:
-            # TODO: Implement all other string types and do some checking for data length/type
-            bit_stream += encode(data, self.version, mode)
+        bit_stream: str = self._make_data_stream()
 
-        data_codewords: int = lookup_data_codeword_capacity(self.version, self.error_correction_level)
+        data_bit_capacity = get_data_bit_capacity(self.version, self.error_correction_level)
 
-        bits_required: int = data_codewords * 8
+        bit_stream = self._add_terminator(bit_stream, data_bit_capacity)
 
+        bit_stream = self._add_padding_bytes(bit_stream, data_bit_capacity)
+
+        if (len(bit_stream)) > get_data_bit_capacity(self.version, self.error_correction_level):
+            raise Exception(f"Too much data to be properly stored in qrcode of version {self.version} with error correction level {self.error_correction_level.name}")
+
+        self._add_error_correction_code(bit_stream)
+
+    def _add_terminator(self, bit_stream: str, data_bit_capacity: int) -> str:
+        assert self.version is not None
+        assert self.error_correction_level is not None
+
+        # Fill out the terminator if required
         maximum_terminator_length: int = 4
+        terminator_required: int = min(data_bit_capacity, len(bit_stream) + maximum_terminator_length)
+        return bit_stream.ljust(terminator_required, "0")
 
-        terminator_required: int = min(bits_required, len(bit_stream) + maximum_terminator_length)
-
-        bit_stream = bit_stream.ljust(terminator_required, "0")
-
+    def _add_padding_bytes(self, bit_stream: str, data_bit_capacity: int) -> str:
+        # Fill out to the next full bit
         if len(bit_stream) % 8 != 0:
             next_multiple_of_8 = ceil(len(bit_stream) / 8) * 8
             bit_stream = bit_stream.ljust(next_multiple_of_8, "0")
 
+        # Padd with alternating "11101100" and "00010001"s
         padding_bytes = ("11101100", "00010001")
         i = 0
-        while len(bit_stream) < bits_required:
+        while len(bit_stream) < data_bit_capacity:
             bit_stream += padding_bytes[i % 2]
             i += 1
 
-        # row, col, is_going_up, is_right = self.push_byte(bit_stream)
-
-        # print(bit_stream)
-
-        if (len(bit_stream)) / 8 > lookup_data_codeword_capacity(self.version, self.error_correction_level):
-            raise Exception(f"Too much data to be properly stored in qrcode of version {self.version} with error correction level {self.error_correction_level.name}")
-
-        self._add_error_correction_code(bit_stream)
+        return bit_stream
 
     def _get_required_remainder_bits(self) -> int:
         if self.version is None:
@@ -356,6 +360,8 @@ class QRCode:
 
         self.drawer.push_byte(bit_stream)
 
+        self.write_to_png(file_name="partial.png")
+
     def _add_data_mask(self):
         if self.mask_pattern is None:
             best_mask = self._determine_best_data_mask()
@@ -396,10 +402,6 @@ class QRCode:
             self._apply_data_mask()
             self._add_format_information_area()
 
-            if i == 1:
-                print("Attempt")
-                print(self.matrix)
-                self.write_to_png("partial.png")
             penalty = self._evaluate_data_mask()
             scores.append(penalty)
             # Applying the mask again will "unapply" it
@@ -637,20 +639,69 @@ class QRCode:
         return "".join(rows)
 
 
+class DetailedQRCode(AbstractQRCode):
+    data: list[tuple[Mode, str]] = []
+
+    def add_data(self, data: str, mode: Mode) -> None:
+        self.data.append((mode, data))
+
+    @override
+    def _make_data_stream(self) -> str:
+        if self.version is None:
+            raise Exception("Cannot make data stream with None version")
+        bit_stream = ""
+        for mode, data in self.data:
+            # TODO: Implement all other string types and do some checking for data length/type
+            bit_stream += encode(data, self.version, mode)
+        return bit_stream
+
+
+class SimpleQRCode(AbstractQRCode):
+    data: str = ""
+
+    def add_data(self, data: str) -> None:
+        self.data += data
+
+    @override
+    def _make_data_stream(self) -> str:
+        if self.version is None:
+            raise Exception("Cannot make data stream with None version")
+
+        mode: Mode
+
+        try:
+            [lookup_alphanumeric_value(v) for v in self.data]
+            mode = Mode.ALPHANUMERIC
+        except Exception:
+            try:
+                _ = self.data.encode(ENCODING.LATIN1)
+                mode = Mode.BINARY
+            except Exception:
+                try:
+                    _ = self.data.encode(ENCODING.SHIFTJIS)
+                    mode = Mode.KANJI
+                except Exception:
+                    raise Exception('No valid encoding scheme found for "{self.data}"')
+
+        return encode(self.data, self.version, mode)
+
+
 if __name__ == "__main__":
-    qrcode = QRCode(
+    qrcode = DetailedQRCode(
         version=5,
         error_correction_level=ErrorCorrection.LOW,
-        mask_pattern=0b111,
+        mask_pattern=0b010,
     )
 
-    qrcode.add_data("THIS IS A LONG STRING OF TEXT THAT VERSION ", Mode.ALPHANUMERIC)
-    qrcode.add_data("314159265358979323846264338327950", Mode.NUMERIC)
-    qrcode.add_data("茗荷", Mode.KANJI)
-    qrcode.add_data(" Leicester city is number ", Mode.BINARY)
-    qrcode.add_data("1", Mode.NUMERIC)
-    qrcode.add_data(" BEST FOOTBALL TEAM", Mode.ALPHANUMERIC)
-    qrcode.add_data("!!!", Mode.BINARY)
+    # qrcode.add_data("THIS IS A LONG STRING OF TEXT THAT VERSION ", Mode.ALPHANUMERIC)
+    # qrcode.add_data("314159265358979323846264338327950", Mode.NUMERIC)
+    # qrcode.add_data("茗荷", Mode.KANJI)
+    # qrcode.add_data(" Leicester city is number ", Mode.BINARY)
+    # qrcode.add_data("1", Mode.NUMERIC)
+    # qrcode.add_data(" BEST FOOTBALL TEAM", Mode.ALPHANUMERIC)
+    # qrcode.add_data("!!!", Mode.BINARY)
+
+    qrcode.add_data("Hello gamer!", Mode.BINARY)
     # qrcode.add_data("HELLO WORLá", Mode.BINARY)
     # qrcode.add_data("işçöá", Mode.BINARY)
     # qrcode.add_data("hello", Mode.BINARY)
@@ -658,6 +709,14 @@ if __name__ == "__main__":
     # qrcode.add_data("مرحبا بالعالم", Mode.BINARY)
     qrcode.generate()
     qrcode.write_to_png()
-    print("About to string")
-    print(str(qrcode))
-    print("Completed qrcode")
+
+    simpleQRCode = SimpleQRCode(
+        version=5,
+        error_correction_level=ErrorCorrection.LOW,
+        mask_pattern=0b010,
+    )
+
+    simpleQRCode.add_data("Hello ")
+    simpleQRCode.add_data("gamer!")
+    simpleQRCode.generate()
+    simpleQRCode.write_to_png("simpCode.png")
